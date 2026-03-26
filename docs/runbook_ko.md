@@ -2,15 +2,15 @@
 
 이 문서는 현재 저장소의 코드 사용법, 로컬 개발 방식, Ubuntu 24.04 + ROS 2 Jazzy + PX4 SITL 실행 절차를 한 번에 따라갈 수 있게 정리한 runbook입니다.
 
-## 1. 로컬 Mac 개발
+## 1. 로컬 개발 / 코드 smoke
 
 ### 환경 준비
 
 ```bash
-cd /Users/jimin/Code/HUSL/control-view
-uv venv --python 3.12
+cd /path/to/control-view
+python3.12 -m venv .venv --system-site-packages
 source .venv/bin/activate
-uv pip install -e '.[dev]'
+python -m pip install -e '.[dev]'
 ```
 
 ### 테스트 실행
@@ -18,7 +18,7 @@ uv pip install -e '.[dev]'
 ```bash
 pytest
 ruff check src tests
-python -m control_view.app
+python -m control_view.app --backend fake --dry-run
 ```
 
 ### Python API 예시
@@ -29,7 +29,7 @@ from pathlib import Path
 from control_view.backend.fake_backend import FakeBackend
 from control_view.service import ControlViewService
 
-root = Path("/Users/jimin/Code/HUSL/control-view")
+root = Path("/path/to/control-view")
 backend = FakeBackend()
 backend.set_slot("vehicle.connected", True)
 backend.set_slot("vehicle.mode", "MANUAL")
@@ -76,9 +76,9 @@ print(result.status)
 ```bash
 git clone https://github.com/jiminc77/control-view.git
 cd control-view
-python3.12 -m venv .venv
+python3.12 -m venv .venv --system-site-packages
 source .venv/bin/activate
-pip install -e '.[dev]'
+python -m pip install -e '.[dev]'
 ```
 
 ### ROS 2 Jazzy / PX4 SITL
@@ -95,13 +95,17 @@ make px4_sitl gz_x500
 
 ### sidecar 실행
 
-현재 저장소의 엔트리포인트는 `control-view-sidecar`입니다.
+현재 저장소의 엔트리포인트는 `control-view-sidecar`이며, FastMCP stdio 서버로 동작합니다.
 
 ```bash
-control-view-sidecar
+control-view-sidecar --root "$(pwd)" --backend mavros
 ```
 
-실제 MCP stdio 서버 실행은 이후 `FastMCP` runner 연결만 추가하면 되도록 구조를 잡아 둔 상태입니다. 현재는 service/runtime 자체를 검증하는 데 초점을 두고 있습니다.
+기동 전 smoke는 다음으로 확인합니다.
+
+```bash
+python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
+```
 
 ### `ros-mcp-server` debug path
 
@@ -117,16 +121,15 @@ control-view-sidecar
   - loader/compiler/validation
   - SQLite state store
   - fake backend
-  - materializer
-  - governor
-  - canonical args
-  - lease
+  - live `MavrosBackend`
+  - materializer + contextual slot derivation
+  - governor + canonical args + lease
   - guarded executor
   - obligation open/close
-  - replay skeleton
+  - FastMCP tool surface + stdio app entrypoint
+  - replay / fault / metrics surface
 
 - 현재 제한
-  - `MavrosBackend`는 Ubuntu 런타임 연결용 skeleton입니다
-  - `FastMCP` tool 실행 경로는 코드 골격까지 완료됐고, stdio server wiring은 Ubuntu 검증 단계에서 마감 예정입니다
-  - replay oracle은 rule-based skeleton입니다
-
+  - `failsafe.state`는 여전히 heuristic slot입니다
+  - replay oracle은 rule-based baseline입니다
+  - full PX4 SITL mission 검증은 로컬 환경 availability에 따라 추가 확인이 필요합니다

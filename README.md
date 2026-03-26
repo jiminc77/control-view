@@ -13,19 +13,25 @@ family-specific typed state만 유지하는 sidecar MCP server입니다.
 
 ## 현재 상태
 
-- M0: contracts / compiler / validation
-- M1+: storage, materialization, governor, executor, replay harness 순차 구현
+- contracts / compiler / validation 완료
+- SQLite store, lease, guarded executor, obligation skeleton 완료
+- FastMCP tool surface와 `control-view-sidecar` 엔트리포인트 연결 완료
+- `MavrosBackend`는 ROS 2 Jazzy용 live adapter로 연결되며, fake backend 테스트 경로도 유지
+- replay/fault/metrics는 논문화용 최소 surface까지 구현
+- 남은 검증의 중심은 Ubuntu 24.04 + ROS 2 Jazzy + PX4 SITL 실환경 smoke/mission 확인
 
 ## 빠른 시작
 
 ```bash
-uv venv --python 3.12
+python3.12 -m venv .venv --system-site-packages
 source .venv/bin/activate
-uv pip install -e '.[dev]'
+python -m pip install -e '.[dev]'
 pytest
+ruff check src tests
+python -m control_view.app --backend fake --dry-run
 ```
 
-실제 ROS 2 Jazzy / PX4 SITL 실행 가이드는 문서가 더 준비되면 `docs/`에 정리합니다.
+실제 ROS 2 Jazzy / PX4 SITL 실행 절차는 `docs/runbook_ko.md`에 정리합니다.
 
 ## 문서
 

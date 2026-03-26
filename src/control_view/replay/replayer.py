@@ -26,12 +26,24 @@ class ReplayRunner:
                 latest_leases[record.family or ""] = (
                     result.lease_token.model_dump(mode="json") if result.lease_token else {}
                 )
-                outputs.append(result.model_dump(mode="json"))
+                outputs.append(
+                    {
+                        "record_type": record.record_type,
+                        "family": record.family,
+                        **result.model_dump(mode="json"),
+                    }
+                )
             elif record.record_type == "execute_guarded_request" and record.family:
                 result = self._service.execute_guarded(
                     record.family,
                     record.payload.get("canonical_args", latest_args.get(record.family, {})),
                     LeaseToken.model_validate(record.payload["lease_token"]),
                 )
-                outputs.append(result.model_dump(mode="json"))
+                outputs.append(
+                    {
+                        "record_type": record.record_type,
+                        "family": record.family,
+                        **result.model_dump(mode="json"),
+                    }
+                )
         return outputs

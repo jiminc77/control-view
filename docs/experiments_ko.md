@@ -10,10 +10,19 @@
 
 ## 2. fault injection 후보
 
+- `pose_message_delay`
 - `stale_pose`
+- `estimator_reset_event`
+- `vehicle_reconnect`
+- `operator_mode_override`
 - `geofence_revision_update`
+- `tool_registry_revision_bump`
 - `ack_without_confirm`
+- `offboard_warmup_failure`
 - `offboard_stream_loss`
+- `no_progress_during_goto`
+- `stale_transform`
+- `battery_reserve_drop`
 
 현재 코드는 `FaultInjector.apply(records, fault_name, **params)`로 fault annotation을 붙일 수 있습니다.
 
@@ -34,7 +43,7 @@ from control_view.replay.recorder import ReplayRecorder
 from control_view.replay.replayer import ReplayRunner
 from control_view.service import ControlViewService
 
-root = Path("/Users/jimin/Code/HUSL/control-view")
+root = Path("/path/to/control-view")
 service = ControlViewService(root, backend=FakeBackend())
 recorder = ReplayRecorder()
 
@@ -56,6 +65,7 @@ print(metrics)
 
 현재 기본 메트릭:
 
+- `interface_mismatch_rate`
 - `mission_success_rate`
 - `unsafe_act_rate`
 - `false_refuse_rate`
@@ -67,6 +77,7 @@ print(metrics)
 
 ## 5. Ubuntu 실험 시 기록할 것
 
+- `.venv --system-site-packages` 사용 여부와 설치한 Python 패키지 버전
 - PX4 SITL 실행 커맨드
 - world / vehicle 설정
 - sidecar git commit hash
@@ -83,4 +94,4 @@ print(metrics)
 - `artifacts/metrics/*.json`
 - `artifacts/logs/*.txt`
 - 실험 당시 사용한 `configs/*.yaml`
-
+- `ledger.tail` 캡처와 `control_view.get` / `action.execute_guarded` structured JSON 샘플
