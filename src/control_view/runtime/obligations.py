@@ -41,16 +41,21 @@ class ObligationEngine:
     def reconcile(
         self,
         evidence_map: dict,
+        *,
+        backend_context: dict | None = None,
     ) -> list[ObligationRecord]:
         open_records = self._store.list_open_obligations()
         now_ns = monotonic_ns()
         updated_open: list[ObligationRecord] = []
         for record in open_records:
-            action = self._store.get_action(record.related_action_id)
-            backend_context = action.confirm_evidence_json.get("backend", {}) if action else {}
-
             failed = any(
-                self._condition_failed(condition, record, now_ns, evidence_map, backend_context)
+                self._condition_failed(
+                    condition,
+                    record,
+                    now_ns,
+                    evidence_map,
+                    backend_context or {},
+                )
                 for condition in record.failure_conditions
             )
             if failed:
@@ -60,7 +65,7 @@ class ObligationEngine:
                 continue
 
             if all(
-                self._condition_met(condition, evidence_map, backend_context)
+                self._condition_met(condition, evidence_map, backend_context or {})
                 for condition in record.close_conditions
             ):
                 record.status = "CONFIRMED"
@@ -85,6 +90,10 @@ class ObligationEngine:
                 elapsed_sec = (now_ns - record.created_mono_ns) / 1_000_000_000
                 return elapsed_sec > float(timeout_sec)
             return False
+        if isinstance(condition, str):
+            signals = backend_context.get("signals", {})
+            if condition in signals:
+                return bool(signals[condition])
         return evaluate_expression(
             str(condition),
             evidence_map,

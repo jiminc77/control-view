@@ -1,15 +1,38 @@
 from __future__ import annotations
 
+import atexit
+import math
+import threading
+import time
 from typing import Any
 
 from control_view.backend.base import BackendActionResult, BackendAdapter, BackendSlotValue
+from control_view.common.time import monotonic_ns
 from control_view.common.types import ActionState, JSONDict
+from control_view.common.utils import distance_3d, quaternion_to_yaw
+from control_view.runtime.offboard_stream import OffboardStreamWorker
 
 
 class MavrosBackend(BackendAdapter):
     def __init__(self, config: JSONDict | None = None) -> None:
-        self.config = config or {}
+        self.config = (config or {}).get("backend", config or {})
         self._snapshot_cache: dict[str, BackendSlotValue] = {}
+        self._lock = threading.RLock()
+        self._rclpy: Any | None = None
+        self._node: Any | None = None
+        self._executor: Any | None = None
+        self._spin_thread: threading.Thread | None = None
+        self._publisher: Any | None = None
+        self._clients: dict[str, Any] = {}
+        self._global_fix: JSONDict | None = None
+        self._current_yaw: float | None = None
+        self._extended_state: dict[str, Any] = {"landed_state": None}
+        self._active_target_pose: JSONDict | None = None
+        self._active_takeoff: JSONDict | None = None
+        self._battery_reserve_fraction = 0.20
+        self._offboard_worker = OffboardStreamWorker(self._publish_setpoint)
+        self._subscriptions_ready = False
+        atexit.register(self.shutdown)
 
     def _require_ros(self) -> Any:
         try:
@@ -20,51 +43,571 @@ class MavrosBackend(BackendAdapter):
             ) from exc
         return rclpy
 
-    def update_cached_slot(self, slot_id: str, value: BackendSlotValue) -> None:
-        self._snapshot_cache[slot_id] = value
+    def _ensure_runtime(self) -> None:
+        if self._node is not None:
+            return
+        rclpy = self._require_ros()
+        self._rclpy = rclpy
+        if not rclpy.ok():
+            rclpy.init(args=None)
+        from geometry_msgs.msg import PoseStamped
+        from rclpy.executors import SingleThreadedExecutor
 
-    def get_current_snapshot(self, slot_ids: list[str]) -> dict[str, BackendSlotValue | None]:
-        return {slot_id: self._snapshot_cache.get(slot_id) for slot_id in slot_ids}
+        namespace = str(self.config.get("namespace", "/mavros"))
+        node_name = str(self.config.get("node_name", "control_view_sidecar"))
+        self._node = rclpy.create_node(node_name, namespace="")
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self._node)
+        self._publisher = self._node.create_publisher(
+            PoseStamped,
+            str(self.config.get("setpoint_topic", f"{namespace}/setpoint_position/local")),
+            10,
+        )
+        self._create_subscriptions(namespace)
+        self._create_clients(namespace)
+        self._spin_thread = threading.Thread(target=self._executor.spin, daemon=True)
+        self._spin_thread.start()
 
-    def refresh_slot(self, slot_id: str) -> BackendSlotValue | None:
-        return self._snapshot_cache.get(slot_id)
+    def _create_subscriptions(self, namespace: str) -> None:
+        if self._subscriptions_ready:
+            return
+        from geometry_msgs.msg import PoseStamped, TwistStamped
+        from mavros_msgs.msg import EstimatorStatus, ExtendedState, HomePosition, State, StatusText
+        from nav_msgs.msg import Odometry
+        from sensor_msgs.msg import BatteryState, NavSatFix
 
-    def get_global_fix(self) -> JSONDict | None:
-        slot = self._snapshot_cache.get("backend.global_fix")
-        return slot.value if slot else None
+        self._node.create_subscription(State, f"{namespace}/state", self._on_state, 10)
+        self._node.create_subscription(
+            Odometry,
+            f"{namespace}/local_position/odom",
+            self._on_odom,
+            10,
+        )
+        self._node.create_subscription(
+            PoseStamped,
+            f"{namespace}/local_position/pose",
+            self._on_pose_fallback,
+            10,
+        )
+        self._node.create_subscription(
+            TwistStamped,
+            f"{namespace}/local_position/velocity_local",
+            self._on_velocity,
+            10,
+        )
+        self._node.create_subscription(
+            EstimatorStatus,
+            f"{namespace}/estimator_status",
+            self._on_estimator_status,
+            10,
+        )
+        self._node.create_subscription(
+            StatusText,
+            f"{namespace}/statustext/recv",
+            self._on_status_text,
+            10,
+        )
+        self._node.create_subscription(
+            HomePosition,
+            f"{namespace}/home_position/home",
+            self._on_home_position,
+            10,
+        )
+        self._node.create_subscription(
+            NavSatFix,
+            f"{namespace}/global_position/global",
+            self._on_global_fix,
+            10,
+        )
+        self._node.create_subscription(
+            BatteryState,
+            f"{namespace}/battery",
+            self._on_battery_state,
+            10,
+        )
+        self._node.create_subscription(
+            ExtendedState,
+            f"{namespace}/extended_state",
+            self._on_extended_state,
+            10,
+        )
+        self._subscriptions_ready = True
 
-    def get_current_yaw(self) -> float | None:
-        slot = self._snapshot_cache.get("backend.current_yaw")
-        if not slot:
-            return None
-        return float(slot.value)
+    def _create_clients(self, namespace: str) -> None:
+        from mavros_msgs.srv import CommandBool, CommandTOL, SetMode
 
-    def _unsupported(self, action: str) -> BackendActionResult:
-        self._require_ros()
-        return BackendActionResult(
-            state=ActionState.FAILED,
-            response={"action": action},
-            reason_codes=["mavros_runtime_not_connected"],
+        self._clients = {
+            "arm": self._node.create_client(
+                CommandBool,
+                str(self.config.get("arm_service", f"{namespace}/cmd/arming")),
+            ),
+            "takeoff": self._node.create_client(
+                CommandTOL,
+                str(self.config.get("takeoff_service", f"{namespace}/cmd/takeoff")),
+            ),
+            "set_mode": self._node.create_client(
+                SetMode,
+                str(self.config.get("set_mode_service", f"{namespace}/set_mode")),
+            ),
+        }
+
+    def _stamp_to_str(self, stamp: Any) -> str:
+        return f"{int(stamp.sec)}.{int(stamp.nanosec):09d}"
+
+    def _cache_slot(
+        self,
+        slot_id: str,
+        value: Any,
+        *,
+        authority_source: str,
+        source_header_stamp: str | None = None,
+        frame_id: str | None = None,
+        reason_codes: list[str] | None = None,
+    ) -> None:
+        with self._lock:
+            self._snapshot_cache[slot_id] = BackendSlotValue(
+                value=value,
+                authority_source=authority_source,
+                source_header_stamp=source_header_stamp,
+                frame_id=frame_id,
+                reason_codes=reason_codes or [],
+            )
+
+    def _on_state(self, msg: Any) -> None:
+        stamp = self._stamp_to_str(msg.header.stamp)
+        self._cache_slot(
+            "vehicle.connected",
+            bool(msg.connected),
+            authority_source="mavros/state",
+            source_header_stamp=stamp,
+        )
+        self._cache_slot(
+            "vehicle.armed",
+            bool(msg.armed),
+            authority_source="mavros/state",
+            source_header_stamp=stamp,
+        )
+        self._cache_slot(
+            "vehicle.mode",
+            str(msg.mode),
+            authority_source="mavros/state",
+            source_header_stamp=stamp,
         )
 
+    def _pose_payload(
+        self,
+        position: Any,
+        orientation: Any,
+        *,
+        frame_id: str,
+        child_frame_id: str,
+    ) -> JSONDict:
+        return {
+            "position": {
+                "x": round(float(position.x), 3),
+                "y": round(float(position.y), 3),
+                "z": round(float(position.z), 3),
+            },
+            "orientation": {
+                "x": float(orientation.x),
+                "y": float(orientation.y),
+                "z": float(orientation.z),
+                "w": float(orientation.w),
+            },
+            "frame_id": frame_id,
+            "child_frame_id": child_frame_id,
+        }
+
+    def _on_odom(self, msg: Any) -> None:
+        stamp = self._stamp_to_str(msg.header.stamp)
+        payload = self._pose_payload(
+            msg.pose.pose.position,
+            msg.pose.pose.orientation,
+            frame_id=msg.header.frame_id,
+            child_frame_id=msg.child_frame_id,
+        )
+        payload["covariance"] = list(msg.pose.covariance)
+        self._current_yaw = quaternion_to_yaw(payload["orientation"])
+        self._cache_slot(
+            "pose.local",
+            payload,
+            authority_source="mavros/odom",
+            source_header_stamp=stamp,
+            frame_id=msg.header.frame_id,
+        )
+
+    def _on_pose_fallback(self, msg: Any) -> None:
+        with self._lock:
+            if "pose.local" in self._snapshot_cache:
+                return
+        stamp = self._stamp_to_str(msg.header.stamp)
+        payload = self._pose_payload(
+            msg.pose.position,
+            msg.pose.orientation,
+            frame_id=msg.header.frame_id,
+            child_frame_id="base_link",
+        )
+        self._current_yaw = quaternion_to_yaw(payload["orientation"])
+        self._cache_slot(
+            "pose.local",
+            payload,
+            authority_source="mavros/pose_fallback",
+            source_header_stamp=stamp,
+            frame_id=msg.header.frame_id,
+        )
+
+    def _on_velocity(self, msg: Any) -> None:
+        stamp = self._stamp_to_str(msg.header.stamp)
+        payload = {
+            "linear": {
+                "x": round(float(msg.twist.linear.x), 3),
+                "y": round(float(msg.twist.linear.y), 3),
+                "z": round(float(msg.twist.linear.z), 3),
+            },
+            "angular": {
+                "x": round(float(msg.twist.angular.x), 3),
+                "y": round(float(msg.twist.angular.y), 3),
+                "z": round(float(msg.twist.angular.z), 3),
+            },
+            "frame_id": msg.header.frame_id,
+        }
+        self._cache_slot(
+            "velocity.local",
+            payload,
+            authority_source="mavros/velocity_local",
+            source_header_stamp=stamp,
+            frame_id=msg.header.frame_id,
+        )
+
+    def _on_estimator_status(self, msg: Any) -> None:
+        stamp = self._stamp_to_str(msg.header.stamp)
+        positive_flags = {
+            "attitude": bool(msg.attitude_status_flag),
+            "velocity_horiz": bool(msg.velocity_horiz_status_flag),
+            "velocity_vert": bool(msg.velocity_vert_status_flag),
+            "pos_horiz_rel": bool(msg.pos_horiz_rel_status_flag),
+            "pos_horiz_abs": bool(msg.pos_horiz_abs_status_flag),
+            "pos_vert_abs": bool(msg.pos_vert_abs_status_flag),
+            "pos_vert_agl": bool(msg.pos_vert_agl_status_flag),
+            "const_pos_mode": bool(msg.const_pos_mode_status_flag),
+            "pred_pos_horiz_rel": bool(msg.pred_pos_horiz_rel_status_flag),
+            "pred_pos_horiz_abs": bool(msg.pred_pos_horiz_abs_status_flag),
+        }
+        veto_flags = [name for name, ok in positive_flags.items() if not ok]
+        if bool(msg.gps_glitch_status_flag):
+            veto_flags.append("gps_glitch")
+        if bool(msg.accel_error_status_flag):
+            veto_flags.append("accel_error")
+        positives = sum(1 for ok in positive_flags.values() if ok)
+        score = positives / max(len(positive_flags), 1)
+        if bool(msg.gps_glitch_status_flag):
+            score -= 0.25
+        if bool(msg.accel_error_status_flag):
+            score -= 0.25
+        self._cache_slot(
+            "estimator.health",
+            {
+                "score": round(max(score, 0.0), 3),
+                "veto_flags": veto_flags,
+            },
+            authority_source="mavros/estimator_status",
+            source_header_stamp=stamp,
+        )
+
+    def _on_status_text(self, msg: Any) -> None:
+        stamp = self._stamp_to_str(msg.header.stamp)
+        text = str(msg.text)
+        lowered = text.lower()
+        active = any(
+            token in lowered
+            for token in ["failsafe", "critical", "emergency", "gps", "ekf", "estimator"]
+        )
+        self._cache_slot(
+            "failsafe.state",
+            {
+                "active": active,
+                "source": "mavros_statustext",
+                "text": text,
+            },
+            authority_source="mavros/statustext",
+            source_header_stamp=stamp,
+            reason_codes=["heuristic_failsafe_active"] if active else [],
+        )
+
+    def _on_home_position(self, msg: Any) -> None:
+        stamp = self._stamp_to_str(msg.header.stamp)
+        self._cache_slot(
+            "home.position",
+            {
+                "geo": {
+                    "latitude": float(msg.geo.latitude),
+                    "longitude": float(msg.geo.longitude),
+                    "altitude": float(msg.geo.altitude),
+                },
+                "position": {
+                    "x": round(float(msg.position.x), 3),
+                    "y": round(float(msg.position.y), 3),
+                    "z": round(float(msg.position.z), 3),
+                },
+                "frame_id": msg.header.frame_id,
+            },
+            authority_source="mavros/home_position",
+            source_header_stamp=stamp,
+            frame_id=msg.header.frame_id,
+        )
+
+    def _on_global_fix(self, msg: Any) -> None:
+        self._global_fix = {
+            "latitude": float(msg.latitude),
+            "longitude": float(msg.longitude),
+            "altitude": float(msg.altitude),
+        }
+
+    def _on_battery_state(self, msg: Any) -> None:
+        stamp = self._stamp_to_str(msg.header.stamp)
+        percentage = float(msg.percentage) if msg.percentage >= 0.0 else 0.0
+        self._cache_slot(
+            "battery.margin",
+            {
+                "margin_fraction": round(max(percentage - self._battery_reserve_fraction, 0.0), 3),
+                "reserve_fraction": self._battery_reserve_fraction,
+            },
+            authority_source="mavros/battery",
+            source_header_stamp=stamp,
+        )
+
+    def _on_extended_state(self, msg: Any) -> None:
+        self._extended_state = {"landed_state": int(msg.landed_state)}
+
+    def _publish_setpoint(self, target_pose: JSONDict) -> None:
+        self._ensure_runtime()
+        from geometry_msgs.msg import PoseStamped
+
+        if self._publisher is None:
+            return
+        message = PoseStamped()
+        message.header.frame_id = str(target_pose.get("frame_id", "map"))
+        message.pose.position.x = float(target_pose.get("position", {}).get("x", 0.0))
+        message.pose.position.y = float(target_pose.get("position", {}).get("y", 0.0))
+        message.pose.position.z = float(target_pose.get("position", {}).get("z", 0.0))
+        yaw = float(target_pose.get("yaw", 0.0))
+        message.pose.orientation.z = math.sin(yaw / 2.0)
+        message.pose.orientation.w = math.cos(yaw / 2.0)
+        self._publisher.publish(message)
+
+    def update_cached_slot(self, slot_id: str, value: BackendSlotValue) -> None:
+        with self._lock:
+            self._snapshot_cache[slot_id] = value
+
+    def get_current_snapshot(self, slot_ids: list[str]) -> dict[str, BackendSlotValue | None]:
+        self._ensure_runtime()
+        return {slot_id: self.refresh_slot(slot_id) for slot_id in slot_ids}
+
+    def refresh_slot(self, slot_id: str) -> BackendSlotValue | None:
+        self._ensure_runtime()
+        if slot_id == "offboard.stream.ok":
+            snapshot = self._offboard_worker.snapshot_value()
+            return BackendSlotValue(
+                value=snapshot,
+                authority_source="offboard_stream_worker",
+                reason_codes=["offboard_stream_lost"] if not snapshot.get("value", False) else [],
+            )
+        with self._lock:
+            return self._snapshot_cache.get(slot_id)
+
+    def get_global_fix(self) -> JSONDict | None:
+        self._ensure_runtime()
+        return self._global_fix
+
+    def get_current_yaw(self) -> float | None:
+        self._ensure_runtime()
+        return self._current_yaw
+
+    def get_runtime_context(self) -> JSONDict:
+        self._ensure_runtime()
+        with self._lock:
+            pose = self._snapshot_cache.get("pose.local")
+            velocity = self._snapshot_cache.get("velocity.local")
+            mode = self._snapshot_cache.get("vehicle.mode")
+            armed = self._snapshot_cache.get("vehicle.armed")
+        current_z = float((pose.value.get("position") or {}).get("z", 0.0)) if pose else 0.0
+        speed_mps = 0.0
+        if velocity:
+            linear = velocity.value.get("linear", velocity.value)
+            speed_mps = (
+                float(linear.get("x", 0.0)) ** 2
+                + float(linear.get("y", 0.0)) ** 2
+                + float(linear.get("z", 0.0)) ** 2
+            ) ** 0.5
+        distance_m = distance_3d(
+            (pose.value.get("position") if pose else None),
+            (self._active_target_pose or {}).get("position"),
+        )
+        current_mode = str(mode.value) if mode else ""
+        on_ground = self._extended_state.get("landed_state") == 1
+        arrived = distance_m is not None and distance_m <= 0.5 and speed_mps <= 0.3
+        altitude_reached = bool(
+            self._active_takeoff
+            and current_z >= float(self._active_takeoff.get("target_z", 0.0)) - 0.3
+        )
+        altitude_gain_too_small = bool(
+            self._active_takeoff
+            and (
+                monotonic_ns() - int(self._active_takeoff.get("issued_mono_ns", 0))
+            ) > 5_000_000_000
+            and current_z < float(self._active_takeoff.get("initial_z", 0.0)) + 0.5
+        )
+        return {
+            "takeoff": {
+                "airborne": not on_ground and bool(armed and armed.value),
+                "altitude_reached": altitude_reached,
+            },
+            "land": {
+                "on_ground": on_ground,
+            },
+            "goto": {
+                "active_target_pose": self._active_target_pose,
+                "distance_m": round(distance_m, 3) if distance_m is not None else None,
+                "arrived": arrived,
+            },
+            "signals": {
+                "OFFBOARD_lost_before_arrival": bool(
+                    self._active_target_pose and current_mode != "OFFBOARD" and not arrived
+                ),
+                "altitude_gain_too_small": altitude_gain_too_small,
+            },
+        }
+
+    def _wait_for_service(self, client: Any, timeout_sec: float) -> bool:
+        return bool(client.wait_for_service(timeout_sec=timeout_sec))
+
+    def _call_service(self, client_name: str, request: Any, timeout_sec: float) -> Any:
+        self._ensure_runtime()
+        client = self._clients[client_name]
+        if not self._wait_for_service(client, timeout_sec):
+            raise RuntimeError(f"{client_name} service unavailable")
+        future = client.call_async(request)
+        deadline = time.monotonic() + timeout_sec
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not future.done():
+            raise TimeoutError(f"{client_name} service timed out")
+        return future.result()
+
+    def _timeout(self, key: str, default: float = 2.0) -> float:
+        timeouts = self.config.get("timeouts", {})
+        return float(timeouts.get(key, timeouts.get("default_sec", default)))
+
     def set_mode(self, mode: str) -> BackendActionResult:
-        return self._unsupported(f"set_mode:{mode}")
+        from mavros_msgs.srv import SetMode
+
+        try:
+            request = SetMode.Request()
+            request.base_mode = 0
+            request.custom_mode = mode
+            response = self._call_service("set_mode", request, self._timeout("default_sec", 2.0))
+        except Exception as exc:
+            return BackendActionResult(
+                state=ActionState.FAILED,
+                response={"mode": mode},
+                reason_codes=[f"set_mode_failed:{type(exc).__name__}"],
+            )
+        state = ActionState.ACKED_WEAK if bool(response.mode_sent) else ActionState.FAILED
+        if state != ActionState.ACKED_WEAK:
+            self._offboard_worker.stop()
+        return BackendActionResult(
+            state=state,
+            response={"mode_sent": bool(response.mode_sent), "mode": mode},
+        )
 
     def arm(self) -> BackendActionResult:
-        return self._unsupported("arm")
+        from mavros_msgs.srv import CommandBool
+
+        try:
+            request = CommandBool.Request()
+            request.value = True
+            response = self._call_service("arm", request, self._timeout("default_sec", 2.0))
+        except Exception as exc:
+            return BackendActionResult(
+                state=ActionState.FAILED,
+                response={"action": "arm"},
+                reason_codes=[f"arm_failed:{type(exc).__name__}"],
+            )
+        return BackendActionResult(
+            state=ActionState.ACKED_STRONG if bool(response.success) else ActionState.FAILED,
+            response={"success": bool(response.success), "result": int(response.result)},
+        )
 
     def takeoff(self, target_altitude: float, geo_reference: JSONDict) -> BackendActionResult:
-        return self._unsupported(f"takeoff:{target_altitude}:{geo_reference}")
+        from mavros_msgs.srv import CommandTOL
+
+        pose = self.refresh_slot("pose.local")
+        initial_z = float((pose.value.get("position") or {}).get("z", 0.0)) if pose else 0.0
+        self._active_takeoff = {
+            "issued_mono_ns": monotonic_ns(),
+            "initial_z": initial_z,
+            "target_z": initial_z + float(target_altitude),
+        }
+        try:
+            request = CommandTOL.Request()
+            request.min_pitch = 0.0
+            request.yaw = float(self._current_yaw or 0.0)
+            request.latitude = float(geo_reference["latitude"])
+            request.longitude = float(geo_reference["longitude"])
+            request.altitude = float(geo_reference["altitude"]) + float(target_altitude)
+            response = self._call_service("takeoff", request, self._timeout("takeoff_sec", 5.0))
+        except Exception as exc:
+            return BackendActionResult(
+                state=ActionState.FAILED,
+                response={"target_altitude": target_altitude},
+                reason_codes=[f"takeoff_failed:{type(exc).__name__}"],
+            )
+        return BackendActionResult(
+            state=ActionState.ACKED_STRONG if bool(response.success) else ActionState.FAILED,
+            response={"success": bool(response.success), "result": int(response.result)},
+        )
 
     def goto(self, target_pose: JSONDict, canonical_args: JSONDict) -> BackendActionResult:
-        return self._unsupported(f"goto:{target_pose}:{canonical_args}")
+        self._active_target_pose = target_pose
+        rate_hz = float(canonical_args.get("stream_rate_hz", 20.0))
+        warmup_sec = float(self.config.get("offboard", {}).get("warmup_sec", 1.0))
+        self._offboard_worker.start(target_pose, rate_hz=rate_hz, warmup_sec=warmup_sec)
+        deadline = time.monotonic() + self._timeout("goto_sec", 3.0)
+        while time.monotonic() < deadline:
+            if self._offboard_worker.snapshot_value().get("value"):
+                break
+            time.sleep(0.05)
+        if not self._offboard_worker.snapshot_value().get("value"):
+            self._offboard_worker.stop()
+            return BackendActionResult(
+                state=ActionState.FAILED,
+                response={"target_pose": target_pose},
+                reason_codes=["offboard_warmup_failed"],
+            )
+        return self.set_mode("OFFBOARD")
 
     def hold(self) -> BackendActionResult:
-        return self._unsupported("hold")
+        self._active_target_pose = None
+        self._offboard_worker.stop()
+        return self.set_mode("AUTO.LOITER")
 
     def rtl(self) -> BackendActionResult:
-        return self._unsupported("rtl")
+        self._active_target_pose = None
+        self._offboard_worker.stop()
+        return self.set_mode("AUTO.RTL")
 
     def land(self) -> BackendActionResult:
-        return self._unsupported("land")
+        self._active_target_pose = None
+        self._offboard_worker.stop()
+        return self.set_mode("AUTO.LAND")
 
+    def shutdown(self) -> None:
+        self._offboard_worker.stop()
+        if self._executor is not None:
+            self._executor.shutdown()
+            self._executor = None
+        if self._node is not None:
+            self._node.destroy_node()
+            self._node = None
+        if self._rclpy is not None and self._rclpy.ok():
+            self._rclpy.shutdown()

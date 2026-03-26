@@ -14,6 +14,7 @@ class FakeBackend(BackendAdapter):
         self._action_results: dict[str, BackendActionResult] = {}
         self._global_fix: JSONDict | None = None
         self._yaw: float | None = None
+        self._runtime_context: JSONDict = {"signals": {}}
 
     def set_slot(
         self,
@@ -36,6 +37,9 @@ class FakeBackend(BackendAdapter):
 
     def set_current_yaw(self, yaw: float | None) -> None:
         self._yaw = yaw
+
+    def set_runtime_context(self, runtime_context: JSONDict) -> None:
+        self._runtime_context = runtime_context
 
     def set_action_result(
         self,
@@ -65,6 +69,9 @@ class FakeBackend(BackendAdapter):
 
     def get_current_yaw(self) -> float | None:
         return self._yaw
+
+    def get_runtime_context(self) -> JSONDict:
+        return self._runtime_context
 
     def _action(self, family: str, response: JSONDict | None = None) -> BackendActionResult:
         if family in self._action_results:
@@ -100,4 +107,3 @@ class FakeBackend(BackendAdapter):
 
     def land(self) -> BackendActionResult:
         return self._action("LAND", {"mode_sent": True, "mode": "AUTO.LAND"})
-

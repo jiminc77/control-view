@@ -151,6 +151,14 @@ class SQLiteStore:
         ).fetchall()
         return [ActionRecord.model_validate_json(row["record_json"]) for row in rows]
 
+    def list_actions_since(self, since_mono_ns: int) -> list[ActionRecord]:
+        rows = self.connection.execute(
+            "SELECT record_json FROM actions WHERE requested_mono_ns >= ? "
+            "ORDER BY requested_mono_ns DESC",
+            (since_mono_ns,),
+        ).fetchall()
+        return [ActionRecord.model_validate_json(row["record_json"]) for row in rows]
+
     def get_action(self, action_id: str) -> ActionRecord | None:
         row = self.connection.execute(
             "SELECT record_json FROM actions WHERE action_id = ?",
@@ -183,6 +191,16 @@ class SQLiteStore:
         rows = self.connection.execute(
             "SELECT record_json FROM events ORDER BY received_mono_ns DESC LIMIT ?",
             (last_n,),
+        ).fetchall()
+        from control_view.runtime.event_bus import NormalizedEvent
+
+        return [NormalizedEvent.model_validate_json(row["record_json"]) for row in rows]
+
+    def tail_events_since(self, since_mono_ns: int) -> list:
+        rows = self.connection.execute(
+            "SELECT record_json FROM events WHERE received_mono_ns >= ? "
+            "ORDER BY received_mono_ns DESC",
+            (since_mono_ns,),
         ).fetchall()
         from control_view.runtime.event_bus import NormalizedEvent
 

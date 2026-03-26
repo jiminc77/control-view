@@ -66,18 +66,16 @@ class Executor:
                 abort_reason="canonical_arg_hash_mismatch",
             )
 
-        critical_slots = self._compiled_specs[family].commit_guard_slots
-        refreshed = self._materializer.refresh_slots(critical_slots)
+        view = self._evaluate_family(family, canonical_args, refresh=True)
         for slot_id, expected_revision in lease_token.critical_slot_revisions.items():
-            if refreshed.get(slot_id) and refreshed[slot_id].revision != expected_revision:
+            entry = view.critical_slots.get(slot_id)
+            if entry and entry.revision != expected_revision:
                 return ExecutionResult(
                     status=ActionState.ABORTED,
                     action_id=str(uuid4()),
                     opened_obligation_ids=[],
                     abort_reason=f"critical_slot_revision_changed:{slot_id}",
                 )
-
-        view = self._evaluate_family(family, canonical_args, refresh=False)
         if view.verdict.value != "ACT":
             return ExecutionResult(
                 status=ActionState.ABORTED,
@@ -147,4 +145,3 @@ class Executor:
         if family == "LAND":
             return self._backend.land()
         return self._backend.set_mode(family)
-

@@ -42,6 +42,10 @@ class BackendAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_runtime_context(self) -> JSONDict:
+        raise NotImplementedError
+
+    @abstractmethod
     def set_mode(self, mode: str) -> BackendActionResult:
         raise NotImplementedError
 
@@ -68,4 +72,3 @@ class BackendAdapter(ABC):
     @abstractmethod
     def land(self) -> BackendActionResult:
         raise NotImplementedError
-

@@ -36,20 +36,29 @@ class Materializer:
                 raw_value = self._backend.refresh_slot(slot_id)
             if raw_value is None:
                 raw_value = self._derive_slot(slot_id, {**current, **resolved})
-            entry = self._build_entry(slot_id, raw_value, previous)
-            resolved[slot_id] = entry
-            self._snapshots.upsert(entry)
-            self._event_bus.publish(
-                EventType.SENSOR_OBS,
-                source="materializer",
-                source_header_stamp=entry.source_header_stamp,
-                payload_json={
-                    "slot_id": slot_id,
-                    "revision": entry.revision,
-                    "valid_state": entry.valid_state.value,
-                },
-            )
+            resolved[slot_id] = self.store_slot(slot_id, raw_value, previous=previous)
         return resolved
+
+    def store_slot(
+        self,
+        slot_id: str,
+        raw_value: BackendSlotValue | None,
+        *,
+        previous: EvidenceEntry | None = None,
+    ) -> EvidenceEntry:
+        entry = self._build_entry(slot_id, raw_value, previous or self._snapshots.get(slot_id))
+        self._snapshots.upsert(entry)
+        self._event_bus.publish(
+            EventType.SENSOR_OBS,
+            source="materializer",
+            source_header_stamp=entry.source_header_stamp,
+            payload_json={
+                "slot_id": slot_id,
+                "revision": entry.revision,
+                "valid_state": entry.valid_state.value,
+            },
+        )
+        return entry
 
     def _derive_slot(
         self,

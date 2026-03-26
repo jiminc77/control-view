@@ -6,12 +6,12 @@ from typing import Any
 
 import yaml
 
-from control_view.backend.base import BackendAdapter
+from control_view.backend.base import BackendAdapter, BackendSlotValue
 from control_view.backend.fake_backend import FakeBackend
 from control_view.backend.global_fix_provider import GlobalFixProvider
 from control_view.common.time import monotonic_ns
 from control_view.common.types import Verdict
-from control_view.common.utils import deep_get
+from control_view.common.utils import deep_get, distance_3d, point_in_polygon, stable_revision
 from control_view.contracts.compiler import compile_bundle
 from control_view.contracts.loader import load_contract_bundle
 from control_view.contracts.models import (
@@ -79,6 +79,7 @@ class ControlViewService:
             lease_manager=self.lease_manager,
         )
         self._load_artifacts()
+        self._sync_system_slots()
 
     def _load_artifacts(self) -> None:
         geofence_path = self.root / "artifacts" / "geofence.yaml"
@@ -86,6 +87,11 @@ class ControlViewService:
             geofence = yaml.safe_load(geofence_path.read_text())
             revision = int(geofence.get("revision", 1))
             self.artifacts.upsert("geofence", revision, geofence)
+        self.artifacts.upsert("mission_spec", 0, {"revision": 0})
+
+    def _sync_system_slots(self) -> None:
+        self._store_context_slot("tool_registry.rev", {"value": self._tool_registry_revision()})
+        self._store_context_slot("mission.spec.rev", {"value": 0})
 
     def get_control_view(
         self,
@@ -136,14 +142,25 @@ class ControlViewService:
             "suggested_safe_action": self.bundle.families[family].safe_hold_mapping.backend_action,
         }
 
-    def ledger_tail(self, *, last_n: int = 20) -> dict[str, Any]:
+    def ledger_tail(
+        self,
+        *,
+        last_n: int = 20,
+        since_mono_ns: int | None = None,
+    ) -> dict[str, Any]:
+        recent_events = (
+            self.store.tail_events_since(since_mono_ns)
+            if since_mono_ns is not None
+            else self.store.tail_events(last_n)
+        )
+        recent_actions = (
+            self.store.list_actions_since(since_mono_ns)
+            if since_mono_ns is not None
+            else self.store.list_actions(last_n)
+        )
         return {
-            "recent_events": [
-                item.model_dump(mode="json") for item in self.store.tail_events(last_n)
-            ],
-            "recent_actions": [
-                item.model_dump(mode="json") for item in self.store.list_actions(last_n)
-            ],
+            "recent_events": [item.model_dump(mode="json") for item in recent_events],
+            "recent_actions": [item.model_dump(mode="json") for item in recent_actions],
             "open_obligations": [
                 item.model_dump(mode="json") for item in self.store.list_open_obligations()
             ],
@@ -159,13 +176,36 @@ class ControlViewService:
     ) -> ControlViewResult:
         contract = self.bundle.families[family]
         compiled = self.compiled[family]
+        backend_context = self.backend.get_runtime_context()
+        non_contextual_slots = [
+            slot_id
+            for slot_id in compiled.required_slots
+            if slot_id not in {"geofence.status", "nav.progress"}
+        ]
         evidence_map = (
-            self.materializer.refresh_slots(compiled.required_slots)
+            self.materializer.refresh_slots(non_contextual_slots)
             if refresh
-            else self.snapshots.get_many(compiled.required_slots)
+            else self.snapshots.get_many(non_contextual_slots)
         )
-        open_obligations = self.obligations.reconcile(evidence_map)
         canonical_args, arg_blockers = self._canonicalize(family, proposed_args, evidence_map)
+        evidence_map.update(
+            self._materialize_contextual_slots(
+                family,
+                compiled.required_slots,
+                canonical_args,
+                evidence_map,
+                backend_context=backend_context,
+            )
+        )
+        if not refresh:
+            evidence_map = {
+                **self.snapshots.get_many(compiled.required_slots),
+                **evidence_map,
+            }
+        open_obligations = self.obligations.reconcile(
+            evidence_map,
+            backend_context=backend_context,
+        )
         evaluation = self.governor.evaluate(
             contract,
             compiled,
@@ -173,6 +213,7 @@ class ControlViewService:
             canonical_args=canonical_args,
             open_obligations=open_obligations,
             extra_blockers=arg_blockers,
+            backend_context=backend_context,
         )
         lease_token = None
         lease_expires_in_ms = None
@@ -201,6 +242,135 @@ class ControlViewService:
             lease_token=lease_token,
             lease_expires_in_ms=lease_expires_in_ms,
         )
+
+    def _materialize_contextual_slots(
+        self,
+        family: str,
+        required_slots: list[str],
+        canonical_args: dict[str, Any],
+        evidence_map: dict[str, Any],
+        *,
+        backend_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        resolved: dict[str, Any] = {}
+        if "geofence.status" in required_slots and family == "GOTO":
+            resolved["geofence.status"] = self._store_context_slot(
+                "geofence.status",
+                self._compute_geofence_status(canonical_args),
+            )
+        if "nav.progress" in required_slots:
+            resolved["nav.progress"] = self._store_context_slot(
+                "nav.progress",
+                self._compute_nav_progress(family, canonical_args, evidence_map, backend_context),
+            )
+        if "tool_registry.rev" in required_slots:
+            resolved["tool_registry.rev"] = self._store_context_slot(
+                "tool_registry.rev",
+                {"value": self._tool_registry_revision()},
+            )
+        if "mission.spec.rev" in required_slots:
+            resolved["mission.spec.rev"] = self._store_context_slot(
+                "mission.spec.rev",
+                {"value": 0},
+            )
+        return resolved
+
+    def _store_context_slot(self, slot_id: str, value: dict[str, Any] | None) -> Any:
+        raw_value = None
+        if value is not None:
+            raw_value = BackendSlotValue(
+                value=value,
+                authority_source="sidecar",
+                frame_id=value.get("frame_id"),
+            )
+        return self.materializer.store_slot(slot_id, raw_value)
+
+    def _compute_geofence_status(self, canonical_args: dict[str, Any]) -> dict[str, Any] | None:
+        target_position = deep_get(canonical_args, "target_pose.position")
+        if not target_position:
+            return None
+        geofence = next(
+            (item for item in self.artifacts.list_all() if item["artifact_name"] == "geofence"),
+            None,
+        )
+        if not geofence:
+            return {"target_inside": False, "artifact_revision": 0}
+        polygons = geofence["payload"].get("polygons", [])
+        target_inside = any(
+            point_in_polygon(target_position, polygon.get("points", []))
+            for polygon in polygons
+        )
+        return {
+            "target_inside": target_inside,
+            "artifact_revision": geofence["revision"],
+            "frame_id": geofence["payload"].get("frame_id", "map"),
+        }
+
+    def _compute_nav_progress(
+        self,
+        family: str,
+        canonical_args: dict[str, Any],
+        evidence_map: dict[str, Any],
+        backend_context: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        pose = evidence_map.get("pose.local")
+        velocity = evidence_map.get("velocity.local")
+        mode = evidence_map.get("vehicle.mode")
+        if not pose or not pose.value_json or not mode or mode.value_json is None:
+            return None
+
+        target_pose = deep_get(canonical_args, "target_pose")
+        if not target_pose:
+            target_pose = deep_get(backend_context, "goto.active_target_pose")
+        current_position = deep_get(pose.value_json, "position", {})
+        speed_mps = self._vector_speed(deep_get(velocity.value_json, "linear", velocity.value_json))
+        distance_m = distance_3d(
+            current_position,
+            deep_get(target_pose, "position"),
+        )
+        current_mode = str(mode.value_json.get("value", mode.value_json))
+
+        if current_mode == "AUTO.LOITER" and speed_mps <= 0.3:
+            phase = "HOLDING"
+        elif (
+            distance_m is not None
+            and current_mode == "OFFBOARD"
+            and distance_m <= 0.5
+            and speed_mps <= 0.3
+        ):
+            phase = "ARRIVED"
+        elif family == "GOTO" or target_pose:
+            phase = "IN_PROGRESS"
+        else:
+            phase = "IDLE"
+        return {
+            "phase": phase,
+            "distance_m": round(distance_m or 0.0, 3),
+            "speed_mps": round(speed_mps, 3),
+        }
+
+    def _vector_speed(self, vector: dict[str, Any] | None) -> float:
+        if not vector:
+            return 0.0
+        return (
+            float(vector.get("x", 0.0)) ** 2
+            + float(vector.get("y", 0.0)) ** 2
+            + float(vector.get("z", 0.0)) ** 2
+        ) ** 0.5
+
+    def _tool_registry_revision(self) -> int:
+        payload = {
+            "families": sorted(self.bundle.families),
+            "fields": sorted(self.bundle.fields),
+            "tools": [
+                "control_view.get",
+                "control_view.refresh",
+                "action.execute_guarded",
+                "control.explain_blockers",
+                "ledger.tail",
+            ],
+        }
+        return stable_revision(payload)
 
     def _lease_duration_ms(self, slot_ids: list[str]) -> int:
         lease_values = [
