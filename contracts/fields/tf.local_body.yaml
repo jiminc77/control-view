@@ -1,0 +1,25 @@
+id: tf.local_body
+class: versioned_artifact
+owner: sidecar
+value_schema:
+  type: object
+  properties:
+    frame_id: {type: string}
+    child_frame_id: {type: string}
+source:
+  kind: derived
+authority:
+  order: [sidecar]
+derivation:
+  kind: frame_contract
+  dependencies: [pose.local]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 1000, medium: 500, high: 500}
+  lease_ms: 100
+invalidators:
+  - stale_transform
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision]
+

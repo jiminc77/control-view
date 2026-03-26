@@ -1,0 +1,18 @@
+id: vehicle.connected
+class: event_discrete
+owner: backend
+value_type: boolean
+source:
+  topic: /mavros/state
+  field: connected
+authority:
+  order: [mavros_state]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 2000, medium: 1000, high: 500}
+  lease_ms: 250
+invalidators:
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision]
+

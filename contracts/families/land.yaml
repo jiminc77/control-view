@@ -1,0 +1,40 @@
+family: LAND
+risk_class: high
+argument_schema:
+  type: object
+  properties: {}
+guard_slots:
+  - vehicle.connected
+  - vehicle.mode
+  - vehicle.armed
+  - pose.local
+  - estimator.health
+support_slots: []
+confirm_slots: [vehicle.armed, velocity.local]
+diagnostic_slots: []
+predicates:
+  - id: connected_ok
+    expr: vehicle.connected == true
+  - id: armed_ok
+    expr: vehicle.armed == true
+  - id: pose_valid
+    expr: pose.local.valid_state == "VALID"
+  - id: est_ok
+    expr: estimator.health.score >= 0.8
+backend_mapping:
+  kind: service
+  service: /mavros/set_mode
+  custom_mode: AUTO.LAND
+effects:
+  invalidates: [vehicle.armed, velocity.local]
+obligation_templates:
+  - id: LAND_PENDING
+    open_on: ACKED_WEAK
+    close_when:
+      - backend.land.on_ground == true
+      - vehicle.armed == false
+    fail_when:
+      - not_confirmed_within_sec: 30.0
+safe_hold_mapping:
+  backend_action: HOLD
+

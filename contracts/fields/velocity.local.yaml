@@ -1,0 +1,19 @@
+id: velocity.local
+class: kinematic
+owner: backend
+value_type: velocity_atomic
+source:
+  topic: /mavros/local_position/velocity_local
+  type: geometry_msgs/msg/TwistStamped
+authority:
+  order: [velocity_local]
+revision_rule: increment_on_every_accepted_sample
+freshness:
+  ttl_ms: {low: 500, medium: 300, high: 200}
+  lease_ms: 80
+invalidators:
+  - any_motion_family_requested
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, frame_id, authority_source, observed_age_ms, revision]
+

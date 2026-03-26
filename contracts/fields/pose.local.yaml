@@ -1,0 +1,24 @@
+id: pose.local
+class: kinematic
+owner: backend
+value_type: pose_atomic
+source:
+  primary:
+    topic: /mavros/local_position/odom
+    type: nav_msgs/msg/Odometry
+  fallback:
+    topic: /mavros/local_position/pose
+    type: geometry_msgs/msg/PoseStamped
+authority:
+  order: [odom, pose]
+revision_rule: increment_on_every_accepted_sample
+freshness:
+  ttl_ms: {low: 500, medium: 300, high: 200}
+  lease_ms: 80
+invalidators:
+  - any_motion_family_requested
+  - estimator_reset_detected
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, covariance, frame_id, authority_source, observed_age_ms, revision]
+

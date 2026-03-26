@@ -1,0 +1,25 @@
+id: estimator.health
+class: derived_quality
+owner: sidecar
+value_schema:
+  type: object
+  properties:
+    score: {type: number}
+    veto_flags: {type: array}
+source:
+  topic: /mavros/estimator_status
+authority:
+  order: [estimator_status]
+derivation:
+  kind: weighted_score
+  dependencies: [vehicle.connected]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 1000, medium: 500, high: 500}
+  lease_ms: 100
+invalidators:
+  - estimator_reset_detected
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision, reason_codes]
+

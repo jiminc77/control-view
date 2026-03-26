@@ -1,0 +1,12 @@
+backend:
+  kind: mavros
+  namespace: /mavros
+  setpoint_topic: /mavros/setpoint_position/local
+  set_mode_service: /mavros/set_mode
+  arm_service: /mavros/cmd/arming
+  takeoff_service: /mavros/cmd/takeoff
+  timeouts:
+    default_sec: 2.0
+    takeoff_sec: 5.0
+    goto_sec: 3.0
+

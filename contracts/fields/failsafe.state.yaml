@@ -1,0 +1,22 @@
+id: failsafe.state
+class: event_discrete
+owner: sidecar
+value_schema:
+  type: object
+  properties:
+    active: {type: boolean}
+    source: {type: string}
+source:
+  topic: /mavros/statustext/recv
+authority:
+  order: [statustext_heuristic]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 2000, medium: 1000, high: 500}
+  lease_ms: 250
+invalidators:
+  - vehicle_reconnect
+status: provisional
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision, reason_codes]
+

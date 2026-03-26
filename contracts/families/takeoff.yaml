@@ -1,0 +1,46 @@
+family: TAKEOFF
+risk_class: high
+argument_schema:
+  type: object
+  properties:
+    target_altitude:
+      type: number
+  required: [target_altitude]
+guard_slots:
+  - vehicle.connected
+  - vehicle.mode
+  - vehicle.armed
+  - pose.local
+  - estimator.health
+  - failsafe.state
+support_slots: [battery.margin]
+confirm_slots: [pose.local, velocity.local]
+diagnostic_slots: []
+predicates:
+  - id: connected_ok
+    expr: vehicle.connected == true
+  - id: armed_ok
+    expr: vehicle.armed == true
+  - id: pose_valid
+    expr: pose.local.valid_state == "VALID"
+  - id: est_ok
+    expr: estimator.health.score >= 0.8
+  - id: failsafe_clear
+    expr: failsafe.state.active != true
+backend_mapping:
+  kind: service
+  service: /mavros/cmd/takeoff
+effects:
+  invalidates: [pose.local, velocity.local]
+obligation_templates:
+  - id: TAKEOFF_PENDING
+    open_on: ACKED_STRONG
+    close_when:
+      - backend.takeoff.airborne == true
+      - backend.takeoff.altitude_reached == true
+    fail_when:
+      - altitude_gain_too_small
+      - not_confirmed_within_sec: 20.0
+safe_hold_mapping:
+  backend_action: HOLD
+

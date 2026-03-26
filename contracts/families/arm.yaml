@@ -1,0 +1,27 @@
+family: ARM
+risk_class: medium
+argument_schema:
+  type: object
+  properties: {}
+guard_slots: [vehicle.connected, vehicle.mode, failsafe.state]
+support_slots: []
+confirm_slots: [vehicle.armed]
+diagnostic_slots: []
+predicates:
+  - id: connected_ok
+    expr: vehicle.connected == true
+  - id: failsafe_clear
+    expr: failsafe.state.active != true
+backend_mapping:
+  kind: service
+  service: /mavros/cmd/arming
+effects:
+  invalidates: [vehicle.armed]
+obligation_templates:
+  - id: ARM_PENDING
+    open_on: ACKED_STRONG
+    close_when: [vehicle.armed == true]
+    fail_when: [{not_confirmed_within_sec: 2.0}]
+safe_hold_mapping:
+  backend_action: HOLD
+

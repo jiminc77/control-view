@@ -1,0 +1,17 @@
+id: mission.spec.rev
+class: versioned_artifact
+owner: sidecar
+value_type: integer
+source:
+  storage: sqlite.artifacts
+authority:
+  order: [sidecar]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 60000, medium: 10000, high: 10000}
+  lease_ms: 250
+invalidators:
+  - mission_spec_revision_bump
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision]
+

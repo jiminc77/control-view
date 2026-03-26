@@ -1,0 +1,24 @@
+id: home.ready
+class: derived_quality
+owner: sidecar
+value_schema:
+  type: object
+  properties:
+    ready: {type: boolean}
+source:
+  kind: derived
+authority:
+  order: [sidecar]
+derivation:
+  kind: readiness
+  dependencies: [home.position, vehicle.connected]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 5000, medium: 2000, high: 2000}
+  lease_ms: 250
+invalidators:
+  - home_position_reset
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision]
+

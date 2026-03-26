@@ -1,0 +1,26 @@
+id: nav.progress
+class: derived_quality
+owner: sidecar
+value_schema:
+  type: object
+  properties:
+    phase: {type: string}
+    distance_m: {type: number}
+    speed_mps: {type: number}
+source:
+  kind: derived
+authority:
+  order: [sidecar]
+derivation:
+  kind: navigation_progress
+  dependencies: [pose.local, velocity.local, vehicle.mode]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 500, medium: 300, high: 200}
+  lease_ms: 80
+invalidators:
+  - any_motion_family_requested
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision]
+

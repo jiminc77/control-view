@@ -1,0 +1,30 @@
+family: RTL
+risk_class: high
+argument_schema:
+  type: object
+  properties: {}
+guard_slots: [vehicle.connected, vehicle.armed, home.ready]
+support_slots: []
+confirm_slots: [vehicle.mode]
+diagnostic_slots: []
+predicates:
+  - id: connected_ok
+    expr: vehicle.connected == true
+  - id: armed_ok
+    expr: vehicle.armed == true
+  - id: home_ready
+    expr: home.ready.ready == true
+backend_mapping:
+  kind: service
+  service: /mavros/set_mode
+  custom_mode: AUTO.RTL
+effects:
+  invalidates: [vehicle.mode]
+obligation_templates:
+  - id: RTL_PENDING
+    open_on: ACKED_WEAK
+    close_when: [vehicle.mode == "AUTO.RTL"]
+    fail_when: [{not_confirmed_within_sec: 2.0}]
+safe_hold_mapping:
+  backend_action: HOLD
+

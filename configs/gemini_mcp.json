@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "control-view-sidecar": {
+      "command": "control-view-sidecar"
+    }
+  }
+}
+

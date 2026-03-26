@@ -1,0 +1,18 @@
+id: home.position
+class: versioned_artifact
+owner: backend
+value_type: pose_atomic
+source:
+  topic: /mavros/home_position/home
+authority:
+  order: [home_position]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 10000, medium: 5000, high: 5000}
+  lease_ms: 250
+invalidators:
+  - home_position_reset
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, frame_id, authority_source, observed_age_ms, revision]
+

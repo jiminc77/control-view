@@ -1,0 +1,10 @@
+system:
+  authority_clock: monotonic_ns
+  storage:
+    sqlite_path: control_view.sqlite3
+    wal_mode: true
+  logging:
+    level: INFO
+  lease:
+    ttl_ms_default: 250
+

@@ -1,0 +1,25 @@
+id: battery.margin
+class: derived_quality
+owner: sidecar
+value_schema:
+  type: object
+  properties:
+    margin_fraction: {type: number}
+    reserve_fraction: {type: number}
+source:
+  topic: /mavros/battery
+authority:
+  order: [battery]
+derivation:
+  kind: reserve_margin
+  dependencies: [vehicle.connected]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 5000, medium: 2000, high: 2000}
+  lease_ms: 250
+invalidators:
+  - battery_state_jump
+  - vehicle_reconnect
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision]
+

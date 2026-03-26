@@ -1,0 +1,65 @@
+family: GOTO
+risk_class: high
+argument_schema:
+  type: object
+  properties:
+    target_pose:
+      type: object
+      properties:
+        position:
+          type: object
+        frame_id:
+          type: string
+      required: [position]
+  required: [target_pose]
+guard_slots:
+  - vehicle.connected
+  - vehicle.armed
+  - pose.local
+  - estimator.health
+  - geofence.status
+  - tf.local_body
+  - failsafe.state
+  - offboard.stream.ok
+support_slots: [battery.margin]
+confirm_slots: [vehicle.mode, nav.progress]
+diagnostic_slots: [velocity.local]
+predicates:
+  - id: connected_ok
+    expr: vehicle.connected == true
+  - id: armed_ok
+    expr: vehicle.armed == true
+  - id: pose_valid
+    expr: pose.local.valid_state == "VALID"
+  - id: est_ok
+    expr: estimator.health.score >= 0.8
+  - id: geofence_ok
+    expr: geofence.status.target_inside == true
+  - id: offboard_stream_ok
+    expr: offboard.stream.ok == true
+  - id: failsafe_clear
+    expr: failsafe.state.active != true
+backend_mapping:
+  kind: composite
+  steps:
+    - start_offboard_stream:
+        topic: /mavros/setpoint_position/local
+        rate_hz: 20
+        warmup_sec: 1.0
+    - set_mode:
+        name: /mavros/set_mode
+        custom_mode: OFFBOARD
+effects:
+  invalidates: [pose.local, nav.progress]
+obligation_templates:
+  - id: NAV_PENDING
+    open_on: ACKED_WEAK
+    close_when:
+      - vehicle.mode == "OFFBOARD"
+      - nav.progress.phase == "ARRIVED"
+    fail_when:
+      - OFFBOARD_lost_before_arrival
+      - no_progress_within_sec: 3.0
+safe_hold_mapping:
+  backend_action: HOLD
+

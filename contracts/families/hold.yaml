@@ -1,0 +1,31 @@
+family: HOLD
+risk_class: medium
+argument_schema:
+  type: object
+  properties: {}
+guard_slots: [vehicle.connected, vehicle.mode, vehicle.armed]
+support_slots: []
+confirm_slots: [vehicle.mode, nav.progress]
+diagnostic_slots: [velocity.local]
+predicates:
+  - id: connected_ok
+    expr: vehicle.connected == true
+  - id: armed_ok
+    expr: vehicle.armed == true
+backend_mapping:
+  kind: service
+  service: /mavros/set_mode
+  custom_mode: AUTO.LOITER
+effects:
+  invalidates: [nav.progress]
+obligation_templates:
+  - id: HOLD_PENDING
+    open_on: ACKED_WEAK
+    close_when:
+      - vehicle.mode == "AUTO.LOITER"
+      - nav.progress.phase == "HOLDING"
+    fail_when:
+      - not_confirmed_within_sec: 2.0
+safe_hold_mapping:
+  backend_action: HOLD
+

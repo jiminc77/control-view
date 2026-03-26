@@ -1,0 +1,25 @@
+id: geofence.status
+class: versioned_artifact
+owner: sidecar
+value_schema:
+  type: object
+  properties:
+    target_inside: {type: boolean}
+    artifact_revision: {type: integer}
+source:
+  artifact: artifacts/geofence.yaml
+authority:
+  order: [sidecar_geofence]
+derivation:
+  kind: geofence_check
+  dependencies: [pose.local]
+revision_rule: increment_on_change
+freshness:
+  ttl_ms: {low: 5000, medium: 2000, high: 2000}
+  lease_ms: 100
+invalidators:
+  - geofence_revision_bump
+  - any_motion_family_requested
+serialization_policy:
+  include: [value, authority_source, observed_age_ms, revision]
+
