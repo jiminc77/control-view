@@ -75,9 +75,12 @@ print(metrics)
 - `prompt_tokens_per_turn`
 - `decision_latency_ms`
 
+`prompt_tokens_per_turn`와 `decision_latency_ms`는 현재 집계 함수는 있으나, 실제 mission run에서
+로그를 자동 수집하는 경로는 아직 별도로 붙여야 합니다.
+
 ## 5. Ubuntu 실험 시 기록할 것
 
-- `.venv --system-site-packages` 사용 여부와 설치한 Python 패키지 버전
+- `uv venv .venv --python 3.12 --system-site-packages` 사용 여부와 설치한 Python 패키지 버전
 - PX4 SITL 실행 커맨드
 - world / vehicle 설정
 - sidecar git commit hash

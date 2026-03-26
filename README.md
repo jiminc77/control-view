@@ -23,15 +23,18 @@ family-specific typed state만 유지하는 sidecar MCP server입니다.
 ## 빠른 시작
 
 ```bash
-python3.12 -m venv .venv --system-site-packages
+uv venv .venv --python 3.12 --system-site-packages
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
-pytest
-ruff check src tests
-python -m control_view.app --backend fake --dry-run
+uv sync --extra dev
+uv run pytest
+uv run ruff check src tests
+uv run python -m control_view.app --backend fake --dry-run
 ```
 
 실제 ROS 2 Jazzy / PX4 SITL 실행 절차는 `docs/runbook_ko.md`에 정리합니다.
+
+`--system-site-packages`를 유지하는 이유는 ROS 2 Jazzy가 시스템 Python에 설치한
+`rclpy`, `mavros_msgs` 등을 그대로 재사용해야 하기 때문입니다.
 
 ## 문서
 

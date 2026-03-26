@@ -8,17 +8,17 @@
 
 ```bash
 cd /path/to/control-view
-python3.12 -m venv .venv --system-site-packages
+uv venv .venv --python 3.12 --system-site-packages
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+uv sync --extra dev
 ```
 
 ### 테스트 실행
 
 ```bash
-pytest
-ruff check src tests
-python -m control_view.app --backend fake --dry-run
+uv run pytest
+uv run ruff check src tests
+uv run python -m control_view.app --backend fake --dry-run
 ```
 
 ### Python API 예시
@@ -76,9 +76,9 @@ print(result.status)
 ```bash
 git clone https://github.com/jiminc77/control-view.git
 cd control-view
-python3.12 -m venv .venv --system-site-packages
+uv venv .venv --python 3.12 --system-site-packages
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+uv sync --extra dev
 ```
 
 ### ROS 2 Jazzy / PX4 SITL
@@ -104,7 +104,7 @@ control-view-sidecar --root "$(pwd)" --backend mavros
 기동 전 smoke는 다음으로 확인합니다.
 
 ```bash
-python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
+uv run python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
 ```
 
 ### `ros-mcp-server` debug path
@@ -131,5 +131,7 @@ python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
 
 - 현재 제한
   - `failsafe.state`는 여전히 heuristic slot입니다
-  - replay oracle은 rule-based baseline입니다
-  - full PX4 SITL mission 검증은 로컬 환경 availability에 따라 추가 확인이 필요합니다
+  - replay oracle은 rule-based baseline이며, full decision-oracle 수준은 아닙니다
+  - action state는 `REQUESTED -> ACKED_* -> CONFIRMED/FAILED/EXPIRED` end-to-end 구분이 아직 완성되지 않았습니다
+  - required integration/replay test matrix는 일부만 구현되어 있습니다
+  - full PX4 SITL nominal mission과 Gemini CLI normal-mode demo는 아직 완료되지 않았습니다
