@@ -35,6 +35,7 @@ obligation_templates:
         for_sec: 1.0
       - expr: vehicle.armed == false
     fail_when:
+      - disarm_within_sec_after_touchdown: 5.0
       - not_confirmed_within_sec: 30.0
 safe_hold_mapping:
   backend_action: HOLD

@@ -40,6 +40,7 @@ obligation_templates:
         for_sec: 0.5
     fail_when:
       - altitude_gain_too_small
+      - vehicle.armed == false
       - not_confirmed_within_sec: 20.0
 safe_hold_mapping:
   backend_action: HOLD

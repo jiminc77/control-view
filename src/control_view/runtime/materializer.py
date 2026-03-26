@@ -125,7 +125,10 @@ class Materializer:
                 or previous.frame_id != raw_value.frame_id
                 or previous.reason_codes != raw_value.reason_codes
             )
-            sample_changed = material_changed or previous.source_header_stamp != raw_value.source_header_stamp
+            sample_changed = (
+                material_changed
+                or previous.source_header_stamp != raw_value.source_header_stamp
+            )
             if field.revision_rule == "increment_on_every_accepted_sample" and sample_changed:
                 revision = previous.revision + 1
             elif field.revision_rule != "increment_on_every_accepted_sample" and material_changed:

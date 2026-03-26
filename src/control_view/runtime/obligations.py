@@ -37,6 +37,7 @@ class ObligationEngine:
                 related_action_id=action.action_id,
                 notes={
                     "family": contract.family,
+                    "canonical_args": action.backend_request_json,
                     "condition_started_ns": {},
                     "progress": {},
                 },
@@ -124,7 +125,26 @@ class ObligationEngine:
             else:
                 return False
             if timeout_key == "no_progress_within_sec":
-                return self._no_progress_timeout(record, now_ns, backend_context, float(timeout_sec))
+                return self._no_progress_timeout(
+                    record,
+                    now_ns,
+                    backend_context,
+                    float(timeout_sec),
+                )
+            if timeout_key == "timeout_from_canonical_arg":
+                return self._action_timeout_from_canonical_arg(
+                    record,
+                    now_ns,
+                    str(timeout_sec),
+                )
+            if timeout_key == "disarm_within_sec_after_touchdown":
+                return self._disarm_timeout_after_touchdown(
+                    record,
+                    now_ns,
+                    evidence_map,
+                    backend_context,
+                    float(timeout_sec),
+                )
             timeout_key, timeout_sec = next(iter(condition.items()))
             if timeout_key.endswith("_within_sec") or timeout_key == "timeout_sec":
                 elapsed_sec = (now_ns - record.created_mono_ns) / 1_000_000_000
@@ -211,10 +231,47 @@ class ObligationEngine:
             return False
         return (now_ns - last_improved) / 1_000_000_000 > timeout_sec
 
+    def _action_timeout_from_canonical_arg(
+        self,
+        record: ObligationRecord,
+        now_ns: int,
+        key: str,
+    ) -> bool:
+        timeout_sec = deep_get(record.notes, f"canonical_args.{key}")
+        if timeout_sec is None:
+            return False
+        elapsed_sec = (now_ns - record.created_mono_ns) / 1_000_000_000
+        return elapsed_sec > float(timeout_sec)
+
+    def _disarm_timeout_after_touchdown(
+        self,
+        record: ObligationRecord,
+        now_ns: int,
+        evidence_map: dict,
+        backend_context: dict,
+        timeout_sec: float,
+    ) -> bool:
+        if not bool(deep_get(backend_context, "land.on_ground")):
+            record.notes.setdefault("touchdown_started_ns", None)
+            return False
+        if evaluate_expression("vehicle.armed == false", evidence_map):
+            record.notes.pop("touchdown_started_ns", None)
+            return False
+        started_ns = record.notes.get("touchdown_started_ns")
+        if started_ns is None:
+            started_ns = int(record.created_mono_ns)
+            record.notes["touchdown_started_ns"] = started_ns
+        elapsed_sec = (now_ns - int(started_ns)) / 1_000_000_000
+        return elapsed_sec > timeout_sec
+
     def _failure_status(self, condition) -> str:
         if isinstance(condition, dict):
             key = next(iter(condition))
-            if key.endswith("_within_sec") or key == "timeout_sec":
+            if key.endswith("_within_sec") or key in {
+                "timeout_sec",
+                "timeout_from_canonical_arg",
+                "disarm_within_sec_after_touchdown",
+            }:
                 return "EXPIRED"
         return "FAILED"
 
@@ -239,7 +296,10 @@ class ObligationEngine:
             if open_obligations:
                 return
             action.state = ActionState.CONFIRMED
-            confirmed_obligations = action.confirm_evidence_json.setdefault("confirmed_obligations", [])
+            confirmed_obligations = action.confirm_evidence_json.setdefault(
+                "confirmed_obligations",
+                [],
+            )
             if record.kind not in confirmed_obligations:
                 confirmed_obligations.append(record.kind)
             self._store.upsert_action(action)

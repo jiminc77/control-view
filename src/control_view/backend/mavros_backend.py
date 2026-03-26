@@ -18,6 +18,8 @@ class MavrosBackend(BackendAdapter):
         self.config = (config or {}).get("backend", config or {})
         self._snapshot_cache: dict[str, BackendSlotValue] = {}
         self._lock = threading.RLock()
+        self._odom_pose: BackendSlotValue | None = None
+        self._fallback_pose: BackendSlotValue | None = None
         self._rclpy: Any | None = None
         self._node: Any | None = None
         self._executor: Any | None = None
@@ -247,6 +249,54 @@ class MavrosBackend(BackendAdapter):
             "child_frame_id": child_frame_id,
         }
 
+    def _yaw_delta(self, yaw_a: float, yaw_b: float) -> float:
+        delta = (yaw_a - yaw_b + math.pi) % (2.0 * math.pi) - math.pi
+        return abs(delta)
+
+    def _pose_disagreement_reason_codes(
+        self,
+        primary: BackendSlotValue | None,
+        fallback: BackendSlotValue | None,
+    ) -> list[str]:
+        if primary is None or fallback is None:
+            return []
+        if primary.frame_id != fallback.frame_id:
+            return ["source_disagreement:frame"]
+        distance_tolerance = float(
+            self.config.get("pose_disagreement", {}).get("position_tolerance_m", 0.75)
+        )
+        yaw_tolerance = float(
+            self.config.get("pose_disagreement", {}).get("yaw_tolerance_rad", 0.6)
+        )
+        primary_position = primary.value.get("position")
+        fallback_position = fallback.value.get("position")
+        distance_m = distance_3d(primary_position, fallback_position) or 0.0
+        primary_yaw = quaternion_to_yaw(primary.value.get("orientation"))
+        fallback_yaw = quaternion_to_yaw(fallback.value.get("orientation"))
+        if distance_m > distance_tolerance:
+            return [f"source_disagreement:position:{round(distance_m, 3)}"]
+        if self._yaw_delta(primary_yaw, fallback_yaw) > yaw_tolerance:
+            return ["source_disagreement:yaw"]
+        return []
+
+    def _refresh_pose_slot(self) -> None:
+        with self._lock:
+            primary = self._odom_pose or self._fallback_pose
+            if primary is None:
+                return
+            disagreement_codes = self._pose_disagreement_reason_codes(
+                self._odom_pose,
+                self._fallback_pose,
+            )
+            self._snapshot_cache["pose.local"] = BackendSlotValue(
+                value=primary.value,
+                authority_source=primary.authority_source,
+                source_header_stamp=primary.source_header_stamp,
+                frame_id=primary.frame_id,
+                reason_codes=[*primary.reason_codes, *disagreement_codes],
+            )
+            self._current_yaw = quaternion_to_yaw(primary.value.get("orientation"))
+
     def _on_odom(self, msg: Any) -> None:
         stamp = self._stamp_to_str(msg.header.stamp)
         payload = self._pose_payload(
@@ -256,19 +306,16 @@ class MavrosBackend(BackendAdapter):
             child_frame_id=msg.child_frame_id,
         )
         payload["covariance"] = list(msg.pose.covariance)
-        self._current_yaw = quaternion_to_yaw(payload["orientation"])
-        self._cache_slot(
-            "pose.local",
-            payload,
-            authority_source="mavros/odom",
-            source_header_stamp=stamp,
-            frame_id=msg.header.frame_id,
-        )
+        with self._lock:
+            self._odom_pose = BackendSlotValue(
+                value=payload,
+                authority_source="mavros/odom",
+                source_header_stamp=stamp,
+                frame_id=msg.header.frame_id,
+            )
+        self._refresh_pose_slot()
 
     def _on_pose_fallback(self, msg: Any) -> None:
-        with self._lock:
-            if "pose.local" in self._snapshot_cache:
-                return
         stamp = self._stamp_to_str(msg.header.stamp)
         payload = self._pose_payload(
             msg.pose.position,
@@ -276,14 +323,14 @@ class MavrosBackend(BackendAdapter):
             frame_id=msg.header.frame_id,
             child_frame_id="base_link",
         )
-        self._current_yaw = quaternion_to_yaw(payload["orientation"])
-        self._cache_slot(
-            "pose.local",
-            payload,
-            authority_source="mavros/pose_fallback",
-            source_header_stamp=stamp,
-            frame_id=msg.header.frame_id,
-        )
+        with self._lock:
+            self._fallback_pose = BackendSlotValue(
+                value=payload,
+                authority_source="mavros/pose_fallback",
+                source_header_stamp=stamp,
+                frame_id=msg.header.frame_id,
+            )
+        self._refresh_pose_slot()
 
     def _on_velocity(self, msg: Any) -> None:
         stamp = self._stamp_to_str(msg.header.stamp)
@@ -412,14 +459,17 @@ class MavrosBackend(BackendAdapter):
         self._ensure_runtime()
         from geometry_msgs.msg import PoseStamped
 
-        if self._publisher is None:
+        if self._publisher is None or self._node is None:
             return
         message = PoseStamped()
+        message.header.stamp = self._node.get_clock().now().to_msg()
         message.header.frame_id = str(target_pose.get("frame_id", "map"))
         message.pose.position.x = float(target_pose.get("position", {}).get("x", 0.0))
         message.pose.position.y = float(target_pose.get("position", {}).get("y", 0.0))
         message.pose.position.z = float(target_pose.get("position", {}).get("z", 0.0))
         yaw = float(target_pose.get("yaw", 0.0))
+        message.pose.orientation.x = 0.0
+        message.pose.orientation.y = 0.0
         message.pose.orientation.z = math.sin(yaw / 2.0)
         message.pose.orientation.w = math.cos(yaw / 2.0)
         self._publisher.publish(message)
@@ -428,13 +478,18 @@ class MavrosBackend(BackendAdapter):
         with self._lock:
             self._snapshot_cache[slot_id] = value
 
-    def _offboard_params(self, canonical_args: JSONDict | None) -> tuple[JSONDict | None, float, float]:
+    def _offboard_params(
+        self,
+        canonical_args: JSONDict | None,
+    ) -> tuple[JSONDict | None, float, float]:
         args = canonical_args or {}
         target_pose = args.get("target_pose")
+        offboard_config = self.config.get("offboard", {})
+        default_rate_hz = float(offboard_config.get("stream_rate_hz", 20.0))
+        warmup_sec = float(offboard_config.get("warmup_sec", 1.0))
         if not isinstance(target_pose, dict):
-            return None, 20.0, float(self.config.get("offboard", {}).get("warmup_sec", 1.0))
-        rate_hz = float(args.get("stream_rate_hz", 20.0))
-        warmup_sec = float(self.config.get("offboard", {}).get("warmup_sec", 1.0))
+            return None, default_rate_hz, warmup_sec
+        rate_hz = float(args.get("stream_rate_hz", default_rate_hz))
         return target_pose, rate_hz, warmup_sec
 
     def _ensure_offboard_stream(
@@ -445,7 +500,10 @@ class MavrosBackend(BackendAdapter):
         warmup_sec: float,
     ) -> bool:
         snapshot = self._offboard_worker.snapshot_value()
-        same_target = self._preview_target_pose == target_pose or self._active_target_pose == target_pose
+        same_target = (
+            self._preview_target_pose == target_pose
+            or self._active_target_pose == target_pose
+        )
         if not same_target or not snapshot.get("value", False):
             self._offboard_worker.start(target_pose, rate_hz=rate_hz, warmup_sec=warmup_sec)
         deadline = time.monotonic() + max(self._timeout("goto_sec", 3.0), warmup_sec + 0.5)
@@ -480,7 +538,10 @@ class MavrosBackend(BackendAdapter):
 
     def get_current_snapshot(self, slot_ids: list[str]) -> dict[str, BackendSlotValue | None]:
         self._ensure_runtime()
-        self._wait_for_slots(slot_ids, timeout_sec=float(self.config.get("startup_wait_sec", 2.0)))
+        self._wait_for_slots(
+            slot_ids,
+            timeout_sec=float(self.config.get("startup_wait_sec", 2.0)),
+        )
         return {slot_id: self.refresh_slot(slot_id) for slot_id in slot_ids}
 
     def refresh_slot(self, slot_id: str) -> BackendSlotValue | None:
@@ -597,7 +658,14 @@ class MavrosBackend(BackendAdapter):
         wait_for = {
             slot_id
             for slot_id in slot_ids
-            if slot_id not in {"offboard.stream.ok", "geofence.status", "nav.progress", "tool_registry.rev", "mission.spec.rev"}
+            if slot_id
+            not in {
+                "offboard.stream.ok",
+                "geofence.status",
+                "nav.progress",
+                "tool_registry.rev",
+                "mission.spec.rev",
+            }
         }
         if not wait_for:
             return

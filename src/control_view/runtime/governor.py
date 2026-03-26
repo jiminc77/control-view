@@ -200,6 +200,8 @@ class Governor:
             return ValidState.MISSING
         if entry.valid_state == ValidState.MISSING:
             return entry.valid_state
+        if any(code.startswith("source_disagreement") for code in entry.reason_codes):
+            return ValidState.DISAGREED
         if any(reason in field.invalidators for reason in entry.reason_codes):
             return ValidState.INVALIDATED
         ttl_ms = deep_get(field.freshness, f"ttl_ms.{risk_class}")

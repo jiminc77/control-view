@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 
 from control_view.common.types import JSONDict
@@ -28,6 +29,30 @@ class RosMcpDebugAdapter:
                 "/rosapi/action_feedback_details",
             ],
         )
+
+    def probe_runtime_services(self) -> set[str]:
+        command = self.config.get("service_list_command", ["ros2", "service", "list"])
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=float(self.config.get("probe_timeout_sec", 2.0)),
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return set()
+        return {
+            line.strip()
+            for line in completed.stdout.splitlines()
+            if line.strip()
+        }
+
+    def probe_runtime_capabilities(self) -> JSONDict:
+        available_services = self.probe_runtime_services()
+        capabilities = self.probe_capabilities(available_services)
+        capabilities["available_services"] = sorted(available_services)
+        return capabilities
 
     def probe_capabilities(self, available_services: set[str]) -> JSONDict:
         missing_required = [

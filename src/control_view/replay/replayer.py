@@ -98,7 +98,12 @@ class ReplayRunner:
                 "family": family,
                 **result.model_dump(mode="json"),
             }
-        if record_type in {"control_view_result", "execution_result", "action_transition", "ledger_snapshot"}:
+        if record_type in {
+            "control_view_result",
+            "execution_result",
+            "action_transition",
+            "ledger_snapshot",
+        }:
             return {
                 "record_type": record_type,
                 "family": family,

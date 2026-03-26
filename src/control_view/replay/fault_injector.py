@@ -59,12 +59,22 @@ class FaultInjector:
                 margin_fraction = float(payload["margin_fraction"])
                 support_slots = deepcopy(updated.get("support_slots", {}))
                 if "battery.margin" in support_slots:
-                    support_slots["battery.margin"]["value_json"]["margin_fraction"] = margin_fraction
+                    support_slots["battery.margin"]["value_json"][
+                        "margin_fraction"
+                    ] = margin_fraction
                     updated["support_slots"] = support_slots
             elif fault_name == "geofence_revision_update":
-                updated = self._bump_artifact_revision(updated, "geofence", int(payload["revision"]))
+                updated = self._bump_artifact_revision(
+                    updated,
+                    "geofence",
+                    int(payload["revision"]),
+                )
             elif fault_name == "tool_registry_revision_bump":
-                updated = self._bump_artifact_revision(updated, "tool_registry", int(payload["revision"]))
+                updated = self._bump_artifact_revision(
+                    updated,
+                    "tool_registry",
+                    int(payload["revision"]),
+                )
             elif fault_name == "ack_without_confirm" and updated.get("status") == "CONFIRMED":
                 updated["status"] = "ACKED_WEAK"
             mutated.append(updated)
@@ -101,6 +111,12 @@ class FaultInjector:
                 item["revision"] = revision
                 replaced = True
         if not replaced:
-            artifact_revisions.append({"artifact_name": artifact_name, "revision": revision, "payload": {}})
+            artifact_revisions.append(
+                {
+                    "artifact_name": artifact_name,
+                    "revision": revision,
+                    "payload": {},
+                }
+            )
         record["artifact_revisions"] = artifact_revisions
         return record

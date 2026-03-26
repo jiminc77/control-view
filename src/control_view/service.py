@@ -92,14 +92,20 @@ class ControlViewService:
         self._upsert_artifact("mission_spec", 0, {"revision": 0})
 
     def _sync_system_slots(self) -> None:
-        tool_registry_revision = self._tool_registry_revision()
+        debug_capabilities = self.debug_adapter.probe_runtime_capabilities()
+        self.event_bus.publish(
+            EventType.DEBUG_PROBE,
+            source="debug_adapter",
+            payload_json=debug_capabilities,
+        )
+        tool_registry_revision = self._tool_registry_revision(debug_capabilities)
         self._upsert_artifact(
             "tool_registry",
             tool_registry_revision,
             {
                 "revision": tool_registry_revision,
                 "tools": self._tool_names(),
-                "debug_capabilities": self.debug_adapter.probe_capabilities(set()),
+                "debug_capabilities": debug_capabilities,
             },
         )
         self._store_context_slot(
@@ -214,11 +220,17 @@ class ControlViewService:
             if refresh
             else self.snapshots.get_many(non_contextual_slots)
         )
+        if family == "GOTO" and canonical_args and not arg_blockers:
+            canonical_args = self._enrich_goto_args(canonical_args, evidence_map)
         if family != "GOTO":
             if canonical_input:
                 canonical_args = proposed_args
             else:
-                canonical_args, arg_blockers = self._canonicalize(family, proposed_args, evidence_map)
+                canonical_args, arg_blockers = self._canonicalize(
+                    family,
+                    proposed_args,
+                    evidence_map,
+                )
             self.backend.prepare_control_view(family, canonical_args)
         backend_context = self.backend.get_runtime_context()
         evidence_map.update(
@@ -389,12 +401,12 @@ class ControlViewService:
             + float(vector.get("z", 0.0)) ** 2
         ) ** 0.5
 
-    def _tool_registry_revision(self) -> int:
+    def _tool_registry_revision(self, debug_capabilities: dict[str, Any]) -> int:
         payload = {
             "families": sorted(self.bundle.families),
             "fields": sorted(self.bundle.fields),
             "tools": self._tool_names(),
-            "debug_capabilities": self.debug_adapter.probe_capabilities(set()),
+            "debug_capabilities": debug_capabilities,
         }
         return stable_revision(payload)
 
@@ -445,7 +457,15 @@ class ControlViewService:
     ) -> tuple[dict[str, Any], list[Blocker]]:
         blockers: list[Blocker] = []
         server_controlled = {
-            key for key in proposed_args if key in {"absolute_local_target_z", "current_geo_reference", "current_yaw", "frame_id"}
+            key
+            for key in proposed_args
+            if key
+            in {
+                "absolute_local_target_z",
+                "current_geo_reference",
+                "current_yaw",
+                "frame_id",
+            }
         }
         if server_controlled:
             return {}, [self._arg_conflict_blocker("TAKEOFF", sorted(server_controlled))]
@@ -508,7 +528,9 @@ class ControlViewService:
     ) -> tuple[dict[str, Any], list[Blocker]]:
         blockers: list[Blocker] = []
         server_controlled = {
-            key for key in proposed_args if key in {"stream_rate_hz", "safe_hold_mode"}
+            key
+            for key in proposed_args
+            if key in {"stream_rate_hz", "safe_hold_mode", "planned_distance_m", "nav_timeout_sec"}
         }
         if server_controlled:
             return {}, [self._arg_conflict_blocker("GOTO", sorted(server_controlled))]
@@ -554,6 +576,21 @@ class ControlViewService:
         if "yaw" in target_pose:
             canonical["target_pose"]["yaw"] = round(float(target_pose["yaw"]), 3)
         return canonical, []
+
+    def _enrich_goto_args(
+        self,
+        canonical_args: dict[str, Any],
+        evidence_map: dict[str, Any],
+    ) -> dict[str, Any]:
+        target_position = deep_get(canonical_args, "target_pose.position")
+        current_position = deep_get(evidence_map.get("pose.local"), "value_json.position")
+        planned_distance_m = distance_3d(current_position, target_position) or 0.0
+        enriched = {
+            **canonical_args,
+            "planned_distance_m": round(planned_distance_m, 3),
+            "nav_timeout_sec": round(max(10.0, (2.0 * planned_distance_m) + 5.0), 3),
+        }
+        return enriched
 
     def _upsert_artifact(self, artifact_name: str, revision: int, payload: dict[str, Any]) -> None:
         previous = self.artifacts.get(artifact_name)

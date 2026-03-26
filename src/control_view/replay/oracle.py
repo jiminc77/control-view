@@ -34,7 +34,12 @@ class RuleBasedOracle:
             return {"value_json": value, "valid_state": value.get("valid_state", "VALID")}
         return {"value_json": {"value": value}, "valid_state": "VALID"}
 
-    def _value(self, full_state: dict[str, Any], slot_id: str, dotted_path: str | None = None) -> Any:
+    def _value(
+        self,
+        full_state: dict[str, Any],
+        slot_id: str,
+        dotted_path: str | None = None,
+    ) -> Any:
         entry = self._entry(full_state, slot_id)
         value_json = entry.get("value_json", {})
         if dotted_path is None:
@@ -59,7 +64,8 @@ class RuleBasedOracle:
         ):
             blockers.append("vehicle.connected")
         if family in {"TAKEOFF", "GOTO", "HOLD", "RTL", "LAND"} and (
-            not self._valid(full_state, "vehicle.armed") or not bool(self._value(full_state, "vehicle.armed"))
+            not self._valid(full_state, "vehicle.armed")
+            or not bool(self._value(full_state, "vehicle.armed"))
         ):
             blockers.append("vehicle.armed")
         if family == "RTL" and not bool(self._value(full_state, "home.ready", "ready")):
@@ -76,7 +82,9 @@ class RuleBasedOracle:
         verdict = "ACT"
         if blockers:
             safety_blockers = {"failsafe.state", "geofence.status"}
-            if family in self._HIGH_RISK and any(blocker in safety_blockers for blocker in blockers):
+            if family in self._HIGH_RISK and any(
+                blocker in safety_blockers for blocker in blockers
+            ):
                 verdict = "SAFE_HOLD"
             else:
                 verdict = "REFRESH"

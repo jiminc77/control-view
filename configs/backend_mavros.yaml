@@ -5,8 +5,14 @@ backend:
   set_mode_service: /mavros/set_mode
   arm_service: /mavros/cmd/arming
   takeoff_service: /mavros/cmd/takeoff
+  startup_wait_sec: 2.0
+  offboard:
+    stream_rate_hz: 20.0
+    warmup_sec: 1.5
+  pose_disagreement:
+    position_tolerance_m: 0.75
+    yaw_tolerance_rad: 0.6
   timeouts:
     default_sec: 2.0
     takeoff_sec: 5.0
-    goto_sec: 3.0
-
+    goto_sec: 4.0

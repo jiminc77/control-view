@@ -20,10 +20,10 @@ def compute_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     decision_records = [record for record in records if "verdict" in record]
     execution_records = [record for record in records if "status" in record]
-    oracle_records = [record for record in decision_records if record.get("oracle_verdict") is not None]
-    verdicts = Counter(record.get("verdict") for record in decision_records)
+    oracle_records = [
+        record for record in decision_records if record.get("oracle_verdict") is not None
+    ]
     statuses = Counter(record.get("status") for record in execution_records)
-    total = len(decision_records) or len(records)
     oracle_total = len(oracle_records) or 1
     interface_mismatches = sum(
         1
@@ -43,7 +43,8 @@ def compute_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     false_refuse = sum(
         1
         for record in oracle_records
-        if record.get("verdict") in {"REFUSE", "SAFE_HOLD"} and record.get("oracle_verdict") == "ACT"
+        if record.get("verdict") in {"REFUSE", "SAFE_HOLD"}
+        and record.get("oracle_verdict") == "ACT"
     )
     unnecessary_refresh = sum(
         1

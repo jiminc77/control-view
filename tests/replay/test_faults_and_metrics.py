@@ -10,7 +10,9 @@ def test_fault_injector_supports_expanded_fault_set() -> None:
         {
             "record_type": "control_view_result",
             "payload": {},
-            "critical_slots": {"pose.local": {"valid_state": "VALID", "value_json": {"position": {}}}},
+            "critical_slots": {
+                "pose.local": {"valid_state": "VALID", "value_json": {"position": {}}}
+            },
         }
     ]
 
