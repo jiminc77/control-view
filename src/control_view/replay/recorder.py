@@ -15,6 +15,8 @@ class ReplayRecord(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     recorded_mono_ns: int
     recorded_wall_time: str
+    source_header_stamp: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReplayRecorder:
@@ -27,6 +29,8 @@ class ReplayRecorder:
         *,
         family: str | None = None,
         payload: dict[str, Any],
+        source_header_stamp: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> ReplayRecord:
         record = ReplayRecord(
             record_type=record_type,
@@ -34,6 +38,8 @@ class ReplayRecorder:
             payload=payload,
             recorded_mono_ns=monotonic_ns(),
             recorded_wall_time=wall_time_iso(),
+            source_header_stamp=source_header_stamp,
+            metadata=metadata or {},
         )
         self.records.append(record)
         return record
@@ -57,6 +63,22 @@ class ReplayRecorder:
             "execution_result",
             family=family,
             payload=result,
+        )
+
+    def record_action_transition(self, family: str, result: dict[str, Any]) -> ReplayRecord:
+        return self.record(
+            "action_transition",
+            family=family,
+            payload=result,
+        )
+
+    def record_ledger_snapshot(self, payload: dict[str, Any]) -> ReplayRecord:
+        return self.record("ledger_snapshot", payload=payload)
+
+    def record_artifact_revision(self, artifact_name: str, revision: int) -> ReplayRecord:
+        return self.record(
+            "artifact_revision",
+            payload={"artifact_name": artifact_name, "revision": revision},
         )
 
     def record_execute_request(
