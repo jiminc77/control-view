@@ -52,7 +52,7 @@ class ControlViewService:
         self.store = SQLiteStore(sqlite_path)
         self.snapshots = SnapshotRepository(self.store)
         self.ledger = LedgerRepository(self.store)
-        self.event_bus = EventBus(self.ledger)
+        self.event_bus = EventBus(self.ledger, recorder=recorder)
         self.artifacts = ArtifactRepository(self.store)
         self.backend = backend or FakeBackend()
         self.debug_adapter = RosMcpDebugAdapter()
@@ -63,7 +63,11 @@ class ControlViewService:
             self.event_bus,
         )
         self.governor = Governor(self.bundle.fields)
-        self.obligations = ObligationEngine(self.store, event_bus=self.event_bus)
+        self.obligations = ObligationEngine(
+            self.store,
+            event_bus=self.event_bus,
+            recorder=recorder,
+        )
         self.global_fix_provider = GlobalFixProvider(self.backend)
         self.recorder = recorder
         secret = lease_secret or os.environ.get(
@@ -82,6 +86,7 @@ class ControlViewService:
             compiled_specs=self.compiled,
             family_contracts=self.bundle.families,
             lease_manager=self.lease_manager,
+            recorder=recorder,
         )
         self._load_artifacts()
         self._sync_system_slots()
@@ -173,12 +178,6 @@ class ControlViewService:
         result = self.executor.execute_guarded(family, canonical_args, lease_token)
         if self.recorder is not None:
             self.recorder.record_execution_result(family, result.model_dump(mode="json"))
-            action = self.store.get_action(result.action_id)
-            if action is not None:
-                self.recorder.record_action_transition(
-                    family,
-                    action.model_dump(mode="json"),
-                )
             self.recorder.record_ledger_snapshot(self.ledger_tail(last_n=20))
         return result
 

@@ -65,6 +65,8 @@ def test_service_recorder_captures_requests_results_and_artifacts() -> None:
     service = ControlViewService(ROOT, backend=backend, recorder=recorder)
     view = service.get_control_view("ARM")
     service.execute_guarded("ARM", view.canonical_args, view.lease_token)
+    backend.set_slot("vehicle.armed", True)
+    service.get_control_view("HOLD")
 
     record_types = [record.record_type for record in recorder.records]
 
@@ -74,6 +76,8 @@ def test_service_recorder_captures_requests_results_and_artifacts() -> None:
     assert "execute_guarded_request" in record_types
     assert "execution_result" in record_types
     assert "action_transition" in record_types
+    assert "obligation_transition" in record_types
+    assert "normalized_event" in record_types
     assert "ledger_snapshot" in record_types
 
 

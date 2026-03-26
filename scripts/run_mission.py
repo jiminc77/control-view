@@ -219,16 +219,7 @@ def _goto_args(service: ControlViewService) -> dict[str, Any]:
 
 
 def _metrics_records(recorder: ReplayRecorder) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for record in recorder.records:
-        if record.record_type in {"control_view_result", "execution_result"}:
-            records.append(
-                {
-                    "family": record.family,
-                    **record.payload,
-                }
-            )
-    return records
+    return [record.model_dump(mode="json") for record in recorder.records]
 
 
 def run_mission(service: ControlViewService, mission: str) -> None:
@@ -344,9 +335,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     record_jsonl.parent.mkdir(parents=True, exist_ok=True)
     summary_json.parent.mkdir(parents=True, exist_ok=True)
+    recorder.record_mission_boundary(args.mission, "start")
+    mission_success = False
+    failure_message: str | None = None
     try:
         run_mission(service, args.mission)
+        mission_success = bool(service.store.list_actions()) and not service.store.list_open_obligations()
+    except Exception as exc:
+        failure_message = str(exc)
+        raise
     finally:
+        recorder.record_mission_boundary(
+            args.mission,
+            "end",
+            payload={
+                "success": mission_success,
+                "open_obligation_count": len(service.store.list_open_obligations()),
+                "action_count": len(service.store.list_actions(limit=1000)),
+                **({"failure_message": failure_message} if failure_message else {}),
+            },
+        )
         recorder.dump_jsonl(record_jsonl)
         if hasattr(service.backend, "shutdown"):
             service.backend.shutdown()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -20,8 +21,16 @@ class ReplayRecord(BaseModel):
 
 
 class ReplayRecorder:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        default_metadata: dict[str, Any] | None = None,
+    ) -> None:
         self.records: list[ReplayRecord] = []
+        self.default_metadata = {
+            "run_id": str(uuid4()),
+            **(default_metadata or {}),
+        }
 
     def record(
         self,
@@ -31,15 +40,20 @@ class ReplayRecorder:
         payload: dict[str, Any],
         source_header_stamp: str | None = None,
         metadata: dict[str, Any] | None = None,
+        recorded_mono_ns: int | None = None,
+        recorded_wall_time: str | None = None,
     ) -> ReplayRecord:
         record = ReplayRecord(
             record_type=record_type,
             family=family,
             payload=payload,
-            recorded_mono_ns=monotonic_ns(),
-            recorded_wall_time=wall_time_iso(),
+            recorded_mono_ns=recorded_mono_ns or monotonic_ns(),
+            recorded_wall_time=recorded_wall_time or wall_time_iso(),
             source_header_stamp=source_header_stamp,
-            metadata=metadata or {},
+            metadata={
+                **self.default_metadata,
+                **(metadata or {}),
+            },
         )
         self.records.append(record)
         return record
@@ -70,6 +84,48 @@ class ReplayRecorder:
             "action_transition",
             family=family,
             payload=result,
+        )
+
+    def record_obligation_transition(
+        self,
+        family: str,
+        result: dict[str, Any],
+    ) -> ReplayRecord:
+        return self.record(
+            "obligation_transition",
+            family=family,
+            payload=result,
+        )
+
+    def record_normalized_event(self, event: dict[str, Any]) -> ReplayRecord:
+        return self.record(
+            "normalized_event",
+            payload=event,
+            source_header_stamp=event.get("source_header_stamp"),
+            recorded_mono_ns=event.get("received_mono_ns"),
+            recorded_wall_time=event.get("received_wall_time"),
+            metadata={"event_type": event.get("event_type")},
+        )
+
+    def record_mission_boundary(
+        self,
+        mission: str,
+        phase: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ReplayRecord:
+        return self.record(
+            "mission_boundary",
+            payload={
+                "mission": mission,
+                "phase": phase,
+                **(payload or {}),
+            },
+            metadata={
+                "mission_id": mission,
+                **(metadata or {}),
+            },
         )
 
     def record_ledger_snapshot(self, payload: dict[str, Any]) -> ReplayRecord:

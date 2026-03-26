@@ -90,17 +90,25 @@ def merge_turn_metrics(
         index
         for index, record in enumerate(merged)
         if "verdict" in record
+        or (
+            record.get("record_type") == "control_view_result"
+            and isinstance(record.get("payload"), dict)
+            and "verdict" in record["payload"]
+        )
     ]
     for index, turn_metric in zip(decision_indexes, turn_metrics, strict=False):
-        merged[index]["prompt_tokens_per_turn"] = round(
+        target = merged[index]
+        if target.get("record_type") == "control_view_result" and isinstance(target.get("payload"), dict):
+            target = target["payload"]
+        target["prompt_tokens_per_turn"] = round(
             float(turn_metric.get("prompt_tokens_per_turn", 0.0)),
             4,
         )
-        merged[index]["decision_latency_ms"] = round(
+        target["decision_latency_ms"] = round(
             float(turn_metric.get("decision_latency_ms", 0.0)),
             4,
         )
         family = turn_metric.get("family")
-        if family and not merged[index].get("family"):
-            merged[index]["family"] = family
+        if family and not target.get("family"):
+            target["family"] = family
     return merged

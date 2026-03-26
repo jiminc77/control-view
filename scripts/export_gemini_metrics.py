@@ -11,16 +11,10 @@ from control_view.replay.recorder import ReplayRecorder
 
 
 def _metric_records(path: Path) -> list[dict]:
-    records = []
-    for record in ReplayRecorder.load_jsonl(path):
-        if record.record_type in {"control_view_result", "execution_result"}:
-            records.append(
-                {
-                    "family": record.family,
-                    **record.payload,
-                }
-            )
-    return records
+    return [
+        record.model_dump(mode="json")
+        for record in ReplayRecorder.load_jsonl(path)
+    ]
 
 
 def build_parser() -> argparse.ArgumentParser:

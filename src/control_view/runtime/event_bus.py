@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from control_view.common.time import monotonic_ns, wall_time_iso
 from control_view.common.types import EventType, JSONDict
+from control_view.replay.recorder import ReplayRecorder
 from control_view.storage.ledger import LedgerRepository
 
 
@@ -20,8 +21,14 @@ class NormalizedEvent(BaseModel):
 
 
 class EventBus:
-    def __init__(self, ledger: LedgerRepository) -> None:
+    def __init__(
+        self,
+        ledger: LedgerRepository,
+        *,
+        recorder: ReplayRecorder | None = None,
+    ) -> None:
         self._ledger = ledger
+        self._recorder = recorder
 
     def publish(
         self,
@@ -41,5 +48,6 @@ class EventBus:
             payload_json=payload_json,
         )
         self._ledger.append(event)
+        if self._recorder is not None:
+            self._recorder.record_normalized_event(event.model_dump(mode="json"))
         return event
-

@@ -6,14 +6,37 @@ from control_view.common.time import monotonic_ns
 from control_view.common.types import ActionState, EventType
 from control_view.common.utils import deep_get, stable_json_dumps
 from control_view.contracts.models import ActionRecord, FamilyContract, ObligationRecord
+from control_view.replay.recorder import ReplayRecorder
 from control_view.runtime.governor import evaluate_expression
 from control_view.storage.sqlite_store import SQLiteStore
 
 
 class ObligationEngine:
-    def __init__(self, store: SQLiteStore, event_bus=None) -> None:
+    def __init__(
+        self,
+        store: SQLiteStore,
+        event_bus=None,
+        recorder: ReplayRecorder | None = None,
+    ) -> None:
         self._store = store
         self._event_bus = event_bus
+        self._recorder = recorder
+
+    def _record_obligation_transition(self, record: ObligationRecord) -> None:
+        if self._recorder is None:
+            return
+        self._recorder.record_obligation_transition(
+            record.family,
+            record.model_dump(mode="json"),
+        )
+
+    def _record_action_transition(self, action: ActionRecord) -> None:
+        if self._recorder is None:
+            return
+        self._recorder.record_action_transition(
+            action.family,
+            action.model_dump(mode="json"),
+        )
 
     def open_for_action(
         self,
@@ -43,6 +66,7 @@ class ObligationEngine:
                 },
             )
             self._store.upsert_obligation(obligation)
+            self._record_obligation_transition(obligation)
             opened.append(obligation)
         return opened
 
@@ -66,6 +90,7 @@ class ObligationEngine:
                 record.status = self._failure_status(failure)
                 record.updated_mono_ns = now_ns
                 self._store.upsert_obligation(record)
+                self._record_obligation_transition(record)
                 self._transition_related_action(record, failure_condition=failure)
                 continue
 
@@ -82,6 +107,7 @@ class ObligationEngine:
                 record.status = "CONFIRMED"
                 record.updated_mono_ns = now_ns
                 self._store.upsert_obligation(record)
+                self._record_obligation_transition(record)
                 self._transition_related_action(record, confirmed=True)
                 continue
 
@@ -303,6 +329,7 @@ class ObligationEngine:
             if record.kind not in confirmed_obligations:
                 confirmed_obligations.append(record.kind)
             self._store.upsert_action(action)
+            self._record_action_transition(action)
             if self._event_bus is not None:
                 self._event_bus.publish(
                     EventType.BACKEND_CONFIRM,
@@ -326,6 +353,7 @@ class ObligationEngine:
         if reason_code not in action.failure_reason_codes:
             action.failure_reason_codes.append(reason_code)
         self._store.upsert_action(action)
+        self._record_action_transition(action)
         if self._event_bus is not None:
             self._event_bus.publish(
                 EventType.BACKEND_CONFIRM,

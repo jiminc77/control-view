@@ -6,6 +6,7 @@ from control_view.backend.base import BackendAdapter
 from control_view.common.time import monotonic_ns
 from control_view.common.types import ActionState, EventType
 from control_view.contracts.models import ActionRecord, ExecutionResult, LeaseToken
+from control_view.replay.recorder import ReplayRecorder
 from control_view.runtime.event_bus import EventBus
 from control_view.runtime.governor import Governor
 from control_view.runtime.obligations import ObligationEngine
@@ -26,6 +27,7 @@ class Executor:
         compiled_specs,
         family_contracts,
         lease_manager,
+        recorder: ReplayRecorder | None = None,
     ) -> None:
         self._backend = backend
         self._event_bus = event_bus
@@ -37,6 +39,15 @@ class Executor:
         self._compiled_specs = compiled_specs
         self._family_contracts = family_contracts
         self._lease_manager = lease_manager
+        self._recorder = recorder
+
+    def _record_action_transition(self, record: ActionRecord) -> None:
+        if self._recorder is None:
+            return
+        self._recorder.record_action_transition(
+            record.family,
+            record.model_dump(mode="json"),
+        )
 
     def _store_terminal_action(
         self,
@@ -58,6 +69,9 @@ class Executor:
                 failure_reason_codes=[reason_code],
             )
         )
+        action = self._store.get_action(action_id)
+        if action is not None:
+            self._record_action_transition(action)
         return ExecutionResult(
             status=status,
             action_id=action_id,
@@ -139,6 +153,7 @@ class Executor:
             backend_request_json=canonical_args,
         )
         self._store.upsert_action(request_record)
+        self._record_action_transition(request_record)
         self._event_bus.publish(
             EventType.BACKEND_REQUEST,
             source="executor",
@@ -168,6 +183,7 @@ class Executor:
             related_obligation_ids=[],
         )
         self._store.upsert_action(record)
+        self._record_action_transition(record)
         self._event_bus.publish(
             EventType.BACKEND_ACK,
             source="executor",
@@ -184,6 +200,7 @@ class Executor:
             if opened:
                 record.related_obligation_ids = [item.obligation_id for item in opened]
                 self._store.upsert_action(record)
+                self._record_action_transition(record)
 
         return ExecutionResult(
             status=result.state,
