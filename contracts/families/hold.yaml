@@ -22,10 +22,9 @@ obligation_templates:
   - id: HOLD_PENDING
     open_on: ACKED_WEAK
     close_when:
-      - vehicle.mode == "AUTO.LOITER"
-      - nav.progress.phase == "HOLDING"
+      - expr: vehicle.mode == "AUTO.LOITER" and nav.progress.phase == "HOLDING"
+        for_sec: 1.0
     fail_when:
       - not_confirmed_within_sec: 2.0
 safe_hold_mapping:
   backend_action: HOLD
-

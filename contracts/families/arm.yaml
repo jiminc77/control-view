@@ -20,8 +20,9 @@ effects:
 obligation_templates:
   - id: ARM_PENDING
     open_on: ACKED_STRONG
-    close_when: [vehicle.armed == true]
+    close_when:
+      - expr: vehicle.armed == true
+        for_sec: 0.3
     fail_when: [{not_confirmed_within_sec: 2.0}]
 safe_hold_mapping:
   backend_action: HOLD
-

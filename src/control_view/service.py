@@ -9,8 +9,9 @@ import yaml
 from control_view.backend.base import BackendAdapter, BackendSlotValue
 from control_view.backend.fake_backend import FakeBackend
 from control_view.backend.global_fix_provider import GlobalFixProvider
+from control_view.backend.ros_mcp_debug_adapter import RosMcpDebugAdapter
 from control_view.common.time import monotonic_ns
-from control_view.common.types import Verdict
+from control_view.common.types import EventType, Verdict
 from control_view.common.utils import deep_get, distance_3d, point_in_polygon, stable_revision
 from control_view.contracts.compiler import compile_bundle
 from control_view.contracts.loader import load_contract_bundle
@@ -52,6 +53,7 @@ class ControlViewService:
         self.event_bus = EventBus(self.ledger)
         self.artifacts = ArtifactRepository(self.store)
         self.backend = backend or FakeBackend()
+        self.debug_adapter = RosMcpDebugAdapter()
         self.materializer = Materializer(
             self.bundle.fields,
             self.backend,
@@ -59,7 +61,7 @@ class ControlViewService:
             self.event_bus,
         )
         self.governor = Governor(self.bundle.fields)
-        self.obligations = ObligationEngine(self.store)
+        self.obligations = ObligationEngine(self.store, event_bus=self.event_bus)
         self.global_fix_provider = GlobalFixProvider(self.backend)
         secret = lease_secret or os.environ.get(
             "CONTROL_VIEW_LEASE_SECRET",
@@ -86,12 +88,28 @@ class ControlViewService:
         if geofence_path.exists():
             geofence = yaml.safe_load(geofence_path.read_text())
             revision = int(geofence.get("revision", 1))
-            self.artifacts.upsert("geofence", revision, geofence)
-        self.artifacts.upsert("mission_spec", 0, {"revision": 0})
+            self._upsert_artifact("geofence", revision, geofence)
+        self._upsert_artifact("mission_spec", 0, {"revision": 0})
 
     def _sync_system_slots(self) -> None:
-        self._store_context_slot("tool_registry.rev", {"value": self._tool_registry_revision()})
-        self._store_context_slot("mission.spec.rev", {"value": 0})
+        tool_registry_revision = self._tool_registry_revision()
+        self._upsert_artifact(
+            "tool_registry",
+            tool_registry_revision,
+            {
+                "revision": tool_registry_revision,
+                "tools": self._tool_names(),
+                "debug_capabilities": self.debug_adapter.probe_capabilities(set()),
+            },
+        )
+        self._store_context_slot(
+            "tool_registry.rev",
+            {"value": tool_registry_revision},
+        )
+        self._store_context_slot(
+            "mission.spec.rev",
+            {"value": self._artifact_revision("mission_spec")},
+        )
 
     def get_control_view(
         self,
@@ -173,6 +191,7 @@ class ControlViewService:
         proposed_args: dict[str, Any],
         *,
         refresh: bool,
+        canonical_input: bool = False,
     ) -> ControlViewResult:
         contract = self.bundle.families[family]
         compiled = self.compiled[family]
@@ -187,7 +206,11 @@ class ControlViewService:
             if refresh
             else self.snapshots.get_many(non_contextual_slots)
         )
-        canonical_args, arg_blockers = self._canonicalize(family, proposed_args, evidence_map)
+        if canonical_input:
+            canonical_args = proposed_args
+            arg_blockers = []
+        else:
+            canonical_args, arg_blockers = self._canonicalize(family, proposed_args, evidence_map)
         evidence_map.update(
             self._materialize_contextual_slots(
                 family,
@@ -266,12 +289,12 @@ class ControlViewService:
         if "tool_registry.rev" in required_slots:
             resolved["tool_registry.rev"] = self._store_context_slot(
                 "tool_registry.rev",
-                {"value": self._tool_registry_revision()},
+                {"value": self._artifact_revision("tool_registry")},
             )
         if "mission.spec.rev" in required_slots:
             resolved["mission.spec.rev"] = self._store_context_slot(
                 "mission.spec.rev",
-                {"value": 0},
+                {"value": self._artifact_revision("mission_spec")},
             )
         return resolved
 
@@ -289,10 +312,7 @@ class ControlViewService:
         target_position = deep_get(canonical_args, "target_pose.position")
         if not target_position:
             return None
-        geofence = next(
-            (item for item in self.artifacts.list_all() if item["artifact_name"] == "geofence"),
-            None,
-        )
+        geofence = self.artifacts.get("geofence")
         if not geofence:
             return {"target_inside": False, "artifact_revision": 0}
         polygons = geofence["payload"].get("polygons", [])
@@ -362,15 +382,19 @@ class ControlViewService:
         payload = {
             "families": sorted(self.bundle.families),
             "fields": sorted(self.bundle.fields),
-            "tools": [
-                "control_view.get",
-                "control_view.refresh",
-                "action.execute_guarded",
-                "control.explain_blockers",
-                "ledger.tail",
-            ],
+            "tools": self._tool_names(),
+            "debug_capabilities": self.debug_adapter.probe_capabilities(set()),
         }
         return stable_revision(payload)
+
+    def _tool_names(self) -> list[str]:
+        return [
+            "control_view.get",
+            "control_view.refresh",
+            "action.execute_guarded",
+            "control.explain_blockers",
+            "ledger.tail",
+        ]
 
     def _lease_duration_ms(self, slot_ids: list[str]) -> int:
         lease_values = [
@@ -386,6 +410,8 @@ class ControlViewService:
         evidence_map: dict[str, Any],
     ) -> tuple[dict[str, Any], list[Blocker]]:
         if family in {"ARM", "HOLD", "RTL", "LAND"}:
+            if proposed_args:
+                return {}, [self._arg_conflict_blocker(family, sorted(proposed_args))]
             return {}, []
         if family == "TAKEOFF":
             return self._canonicalize_takeoff(proposed_args, evidence_map)
@@ -399,6 +425,11 @@ class ControlViewService:
         evidence_map: dict[str, Any],
     ) -> tuple[dict[str, Any], list[Blocker]]:
         blockers: list[Blocker] = []
+        server_controlled = {
+            key for key in proposed_args if key in {"absolute_local_target_z", "current_geo_reference", "current_yaw", "frame_id"}
+        }
+        if server_controlled:
+            return {}, [self._arg_conflict_blocker("TAKEOFF", sorted(server_controlled))]
         if "target_altitude" not in proposed_args:
             blockers.append(
                 make_blocker(
@@ -457,6 +488,11 @@ class ControlViewService:
         proposed_args: dict[str, Any],
     ) -> tuple[dict[str, Any], list[Blocker]]:
         blockers: list[Blocker] = []
+        server_controlled = {
+            key for key in proposed_args if key in {"stream_rate_hz", "safe_hold_mode"}
+        }
+        if server_controlled:
+            return {}, [self._arg_conflict_blocker("GOTO", sorted(server_controlled))]
         target_pose = proposed_args.get("target_pose")
         if not isinstance(target_pose, dict) or "position" not in target_pose:
             blockers.append(
@@ -499,3 +535,31 @@ class ControlViewService:
         if "yaw" in target_pose:
             canonical["target_pose"]["yaw"] = round(float(target_pose["yaw"]), 3)
         return canonical, []
+
+    def _upsert_artifact(self, artifact_name: str, revision: int, payload: dict[str, Any]) -> None:
+        previous = self.artifacts.get(artifact_name)
+        self.artifacts.upsert(artifact_name, revision, payload)
+        if previous != {"artifact_name": artifact_name, "revision": revision, "payload": payload}:
+            self.event_bus.publish(
+                EventType.CONFIG_REVISION,
+                source="artifacts",
+                payload_json={
+                    "artifact_name": artifact_name,
+                    "revision": revision,
+                },
+            )
+
+    def _artifact_revision(self, artifact_name: str) -> int:
+        artifact = self.artifacts.get(artifact_name)
+        return int(artifact["revision"]) if artifact else 0
+
+    def _arg_conflict_blocker(self, family: str, keys: list[str]) -> Blocker:
+        joined = ", ".join(keys)
+        return make_blocker(
+            slot_id="arguments",
+            kind="arg_conflict",
+            severity="high",
+            message=f"{family} received server-controlled or unsupported arguments: {joined}",
+            refreshable=False,
+            refresh_hint=f"remove {joined} from proposed_args",
+        )

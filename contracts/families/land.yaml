@@ -31,10 +31,10 @@ obligation_templates:
   - id: LAND_PENDING
     open_on: ACKED_WEAK
     close_when:
-      - backend.land.on_ground == true
-      - vehicle.armed == false
+      - expr: backend.land.on_ground == true
+        for_sec: 1.0
+      - expr: vehicle.armed == false
     fail_when:
       - not_confirmed_within_sec: 30.0
 safe_hold_mapping:
   backend_action: HOLD
-

@@ -113,6 +113,16 @@ def _validate_family_slots(
                 raise ContractValidationError(
                     f"{contract.family} references unknown slot {slot_id}"
                 )
+    seen: dict[str, str] = {}
+    for role, slots in partition.items():
+        for slot_id in slots:
+            if slot_id in seen:
+                if {seen[slot_id], role} == {"guard", "confirm"}:
+                    continue
+                raise ContractValidationError(
+                    f"{contract.family} overlaps slot {slot_id} across {seen[slot_id]} and {role}"
+                )
+            seen[slot_id] = role
     return partition
 
 
@@ -124,6 +134,13 @@ def _validate_family_policy(
 ) -> None:
     if contract.argument_schema.get("type") != "object":
         raise ContractValidationError(f"{contract.family} argument_schema must be object")
+    required = contract.argument_schema.get("required", [])
+    properties = contract.argument_schema.get("properties", {})
+    for field_name in required:
+        if field_name not in properties:
+            raise ContractValidationError(
+                f"{contract.family} argument_schema requires unknown property {field_name}"
+            )
 
     offboard_used = "offboard.stream.ok" in {
         slot for slots in partition.values() for slot in slots
@@ -139,6 +156,13 @@ def _validate_family_policy(
         if field.status == "provisional":
             raise ContractValidationError(
                 f"{contract.family} cannot use provisional slot {slot_id} in confirm slots"
+            )
+
+    invalidated_slots = contract.effects.get("invalidates", [])
+    for slot_id in invalidated_slots:
+        if slot_id not in fields:
+            raise ContractValidationError(
+                f"{contract.family} invalidates unknown slot {slot_id}"
             )
 
 

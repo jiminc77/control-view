@@ -44,59 +44,90 @@ class Executor:
         canonical_args: dict,
         lease_token: LeaseToken,
     ) -> ExecutionResult:
+        action_id = str(uuid4())
+        if lease_token.family != family:
+            return ExecutionResult(
+                status=ActionState.ABORTED,
+                action_id=action_id,
+                opened_obligation_ids=[],
+                abort_reason="lease_family_mismatch",
+            )
         if not self._lease_manager.verify_signature(lease_token):
             return ExecutionResult(
                 status=ActionState.ABORTED,
-                action_id=str(uuid4()),
+                action_id=action_id,
                 opened_obligation_ids=[],
                 abort_reason="lease_signature_invalid",
             )
         if monotonic_ns() > lease_token.expires_mono_ns:
             return ExecutionResult(
                 status=ActionState.EXPIRED,
-                action_id=str(uuid4()),
+                action_id=action_id,
                 opened_obligation_ids=[],
                 abort_reason="lease_expired",
             )
         if self._lease_manager.canonical_arg_hash(canonical_args) != lease_token.arg_hash:
             return ExecutionResult(
                 status=ActionState.ABORTED,
-                action_id=str(uuid4()),
+                action_id=action_id,
                 opened_obligation_ids=[],
                 abort_reason="canonical_arg_hash_mismatch",
             )
 
-        view = self._evaluate_family(family, canonical_args, refresh=True)
+        view = self._evaluate_family(
+            family,
+            canonical_args,
+            refresh=True,
+            canonical_input=True,
+        )
         for slot_id, expected_revision in lease_token.critical_slot_revisions.items():
             entry = view.critical_slots.get(slot_id)
             if entry and entry.revision != expected_revision:
                 return ExecutionResult(
                     status=ActionState.ABORTED,
-                    action_id=str(uuid4()),
+                    action_id=action_id,
                     opened_obligation_ids=[],
                     abort_reason=f"critical_slot_revision_changed:{slot_id}",
                 )
         if view.verdict.value != "ACT":
             return ExecutionResult(
                 status=ActionState.ABORTED,
-                action_id=str(uuid4()),
+                action_id=action_id,
                 opened_obligation_ids=[],
                 abort_reason="guard_recheck_failed",
             )
 
+        requested_mono_ns = monotonic_ns()
+        request_record = ActionRecord(
+            action_id=action_id,
+            family=family,
+            requested_mono_ns=requested_mono_ns,
+            state=ActionState.REQUESTED,
+            backend_request_json=canonical_args,
+        )
+        self._store.upsert_action(request_record)
         self._event_bus.publish(
             EventType.BACKEND_REQUEST,
             source="executor",
-            payload_json={"family": family, "canonical_args": canonical_args},
+            payload_json={
+                "family": family,
+                "action_id": action_id,
+                "canonical_args": canonical_args,
+            },
         )
         result = self._dispatch(family, canonical_args)
-        action_id = str(uuid4())
         record = ActionRecord(
             action_id=action_id,
             family=family,
-            requested_mono_ns=monotonic_ns(),
+            requested_mono_ns=requested_mono_ns,
             state=result.state,
-            ack_strength="strong" if result.state == ActionState.ACKED_STRONG else "weak",
+            ack_strength=(
+                "strong"
+                if result.state == ActionState.ACKED_STRONG
+                else "weak"
+                if result.state == ActionState.ACKED_WEAK
+                else None
+            ),
             backend_request_json=canonical_args,
             backend_response_json=result.response,
             confirm_evidence_json=result.confirm_evidence,

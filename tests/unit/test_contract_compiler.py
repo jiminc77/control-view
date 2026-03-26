@@ -35,3 +35,17 @@ def test_non_goto_family_cannot_use_offboard_guard() -> None:
 
     with pytest.raises(ContractValidationError):
         compile_bundle(bundle)
+
+
+def test_family_role_overlap_is_rejected() -> None:
+    bundle = load_contract_bundle(ROOT)
+    bad_family = FamilyContract.model_validate(
+        {
+            **bundle.families["ARM"].model_dump(),
+            "support_slots": ["vehicle.connected"],
+        }
+    )
+    bundle.families["ARM"] = bad_family
+
+    with pytest.raises(ContractValidationError):
+        compile_bundle(bundle)

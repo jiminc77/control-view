@@ -66,6 +66,8 @@ class SQLiteStore:
                 ON obligations(status, family);
             CREATE INDEX IF NOT EXISTS idx_actions_state
                 ON actions(state);
+            CREATE INDEX IF NOT EXISTS idx_artifacts_name_revision
+                ON artifacts(artifact_name, revision);
             """
         )
         self.connection.commit()
@@ -187,6 +189,15 @@ class SQLiteStore:
         ).fetchall()
         return [ObligationRecord.model_validate_json(row["record_json"]) for row in rows]
 
+    def list_obligations_for_action(self, action_id: str) -> list[ObligationRecord]:
+        rows = self.connection.execute(
+            "SELECT record_json FROM obligations "
+            "WHERE json_extract(record_json, '$.related_action_id') = ? "
+            "ORDER BY updated_mono_ns DESC",
+            (action_id,),
+        ).fetchall()
+        return [ObligationRecord.model_validate_json(row["record_json"]) for row in rows]
+
     def tail_events(self, last_n: int = 20) -> list:
         rows = self.connection.execute(
             "SELECT record_json FROM events ORDER BY received_mono_ns DESC LIMIT ?",
@@ -230,3 +241,16 @@ class SQLiteStore:
             }
             for row in rows
         ]
+
+    def get_artifact(self, artifact_name: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT artifact_name, revision, payload_json FROM artifacts WHERE artifact_name = ?",
+            (artifact_name,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "artifact_name": row["artifact_name"],
+            "revision": row["revision"],
+            "payload": json.loads(row["payload_json"]),
+        }

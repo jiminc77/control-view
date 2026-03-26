@@ -36,11 +36,10 @@ obligation_templates:
   - id: TAKEOFF_PENDING
     open_on: ACKED_STRONG
     close_when:
-      - backend.takeoff.airborne == true
-      - backend.takeoff.altitude_reached == true
+      - expr: backend.takeoff.airborne == true and backend.takeoff.altitude_reached == true
+        for_sec: 0.5
     fail_when:
       - altitude_gain_too_small
       - not_confirmed_within_sec: 20.0
 safe_hold_mapping:
   backend_action: HOLD
-
