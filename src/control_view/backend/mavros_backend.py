@@ -29,6 +29,7 @@ class MavrosBackend(BackendAdapter):
         self._global_fix: JSONDict | None = None
         self._current_yaw: float | None = None
         self._extended_state: dict[str, Any] = {"landed_state": None}
+        self._ground_reference_z: float | None = None
         self._active_target_pose: JSONDict | None = None
         self._preview_target_pose: JSONDict | None = None
         self._active_takeoff: JSONDict | None = None
@@ -492,6 +493,12 @@ class MavrosBackend(BackendAdapter):
         rate_hz = float(args.get("stream_rate_hz", default_rate_hz))
         return target_pose, rate_hz, warmup_sec
 
+    def _landing_touchdown_params(self) -> tuple[float, float]:
+        landing_config = self.config.get("landing", {})
+        altitude_m = float(landing_config.get("touchdown_altitude_m", 0.35))
+        speed_mps = float(landing_config.get("touchdown_speed_mps", 0.2))
+        return altitude_m, speed_mps
+
     def _ensure_offboard_stream(
         self,
         target_pose: JSONDict,
@@ -584,6 +591,7 @@ class MavrosBackend(BackendAdapter):
             velocity = self._snapshot_cache.get("velocity.local")
             mode = self._snapshot_cache.get("vehicle.mode")
             armed = self._snapshot_cache.get("vehicle.armed")
+            home = self._snapshot_cache.get("home.position")
         current_z = float((pose.value.get("position") or {}).get("z", 0.0)) if pose else 0.0
         speed_mps = 0.0
         if velocity:
@@ -598,7 +606,18 @@ class MavrosBackend(BackendAdapter):
             (self._active_target_pose or {}).get("position"),
         )
         current_mode = str(mode.value) if mode else ""
-        on_ground = self._extended_state.get("landed_state") == 1
+        touchdown_altitude_m, touchdown_speed_mps = self._landing_touchdown_params()
+        ground_reference_z = self._ground_reference_z
+        if ground_reference_z is None and self._active_takeoff is not None:
+            ground_reference_z = float(self._active_takeoff.get("initial_z", current_z))
+        if ground_reference_z is None and home is not None:
+            ground_reference_z = float((home.value.get("position") or {}).get("z", current_z))
+        if ground_reference_z is None:
+            ground_reference_z = current_z
+        touchdown_distance_m = min(abs(current_z), abs(current_z - ground_reference_z))
+        on_ground = self._extended_state.get("landed_state") == 1 or (
+            touchdown_distance_m <= touchdown_altitude_m and speed_mps <= touchdown_speed_mps
+        )
         arrived = distance_m is not None and distance_m <= 0.5 and speed_mps <= 0.3
         altitude_reached = bool(
             self._active_takeoff
@@ -705,6 +724,9 @@ class MavrosBackend(BackendAdapter):
         try:
             request = CommandBool.Request()
             request.value = True
+            pose = self.refresh_slot("pose.local")
+            if pose is not None:
+                self._ground_reference_z = float((pose.value.get("position") or {}).get("z", 0.0))
             response = self._call_service("arm", request, self._timeout("default_sec", 2.0))
         except Exception as exc:
             return BackendActionResult(
@@ -722,6 +744,7 @@ class MavrosBackend(BackendAdapter):
 
         pose = self.refresh_slot("pose.local")
         initial_z = float((pose.value.get("position") or {}).get("z", 0.0)) if pose else 0.0
+        self._ground_reference_z = initial_z
         self._active_takeoff = {
             "issued_mono_ns": monotonic_ns(),
             "initial_z": initial_z,

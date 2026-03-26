@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from control_view.app import main
@@ -40,6 +41,27 @@ def test_app_dry_run_with_fake_backend() -> None:
     assert main(["--root", str(ROOT), "--backend", "fake", "--dry-run"]) == 0
 
 
+def test_app_dry_run_can_write_replay_jsonl(tmp_path) -> None:
+    target = tmp_path / "dry_run.jsonl"
+
+    assert (
+        main(
+            [
+                "--root",
+                str(ROOT),
+                "--backend",
+                "fake",
+                "--record-jsonl",
+                str(target),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    assert target.exists()
+    assert all(json.loads(line) for line in target.read_text().splitlines())
+
+
 def test_goto_geofence_is_derived_from_artifact() -> None:
     service = build_context_service()
 
@@ -51,6 +73,46 @@ def test_goto_geofence_is_derived_from_artifact() -> None:
     assert result.verdict == Verdict.ACT
     assert result.critical_slots["geofence.status"].value_json["target_inside"] is True
     assert result.critical_slots["geofence.status"].value_json["artifact_revision"] == 1
+
+
+def test_hold_can_materialize_nav_progress_from_pose_dependency() -> None:
+    service = build_context_service()
+    service.backend.set_slot("vehicle.mode", "AUTO.LOITER")
+
+    service.get_control_view("HOLD")
+    nav_progress = service.snapshots.get("nav.progress")
+
+    assert nav_progress is not None
+    assert nav_progress.value_json["phase"] == "HOLDING"
+
+
+def test_hold_treats_auto_takeoff_hover_as_holding_phase() -> None:
+    service = build_context_service()
+    service.backend.set_slot("vehicle.mode", "AUTO.TAKEOFF")
+
+    service.get_control_view("HOLD")
+    nav_progress = service.snapshots.get("nav.progress")
+
+    assert nav_progress is not None
+    assert nav_progress.value_json["phase"] == "HOLDING"
+
+
+def test_rtl_can_materialize_home_ready_from_home_position_dependency() -> None:
+    service = build_context_service()
+    service.backend.set_slot(
+        "home.position",
+        {
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "geo": {"latitude": 47.0, "longitude": 8.0, "altitude": 47.0},
+            "frame_id": "map",
+        },
+        frame_id="map",
+    )
+
+    result = service.get_control_view("RTL")
+
+    assert result.verdict == Verdict.ACT
+    assert result.critical_slots["home.ready"].value_json["ready"] is True
 
 
 def test_ledger_tail_can_filter_since_mono_ns() -> None:
@@ -103,3 +165,21 @@ def test_debug_probe_updates_tool_registry_artifact(monkeypatch) -> None:
     assert any(
         event.event_type == EventType.DEBUG_PROBE for event in service.store.tail_events(last_n=10)
     )
+
+
+def test_land_canonical_args_include_dynamic_timeout() -> None:
+    service = build_context_service()
+    service.backend.set_slot(
+        "pose.local",
+        {
+            "position": {"x": 0.0, "y": 0.0, "z": 42.0},
+            "frame_id": "map",
+            "child_frame_id": "base_link",
+        },
+        frame_id="map",
+    )
+
+    result = service.get_control_view("LAND")
+
+    assert result.verdict == Verdict.ACT
+    assert result.canonical_args["land_timeout_sec"] == 47.0

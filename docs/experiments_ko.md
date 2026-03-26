@@ -10,9 +10,9 @@
 
 2026-03-26 live SITL 기준 현재 재현 상태는 다음과 같습니다.
 
-- `ARM -> TAKEOFF -> LAND`: sidecar 경유 `CONFIRMED`
-- `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`: `GOTO`가 `ACKED_WEAK`까지는 진입하지만 `no_progress_within_sec` expiry가 남아 있어 nominal success로 아직 닫히지 않음
-- `ARM -> TAKEOFF -> GOTO -> RTL`: 위와 같은 이유로 아직 미검증
+- `ARM -> TAKEOFF -> HOLD -> LAND`: `CONFIRMED`
+- `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`: `CONFIRMED`
+- `ARM -> TAKEOFF -> GOTO -> RTL`: `CONFIRMED`
 
 ## 2. fault injection 후보
 
@@ -64,9 +64,15 @@ outputs = runner.replay(
     fault_name="tool_registry_revision_bump",
     oracle=None,
     slot_ablation=["pose.local"],
-    policy_swap="ttl_only",
+    policy_swap="B3",
 )
 ```
+
+`policy_swap` 의미:
+
+- `B2`: decision-only baseline
+- `B3`: TTL freshness만 유지하고 invalidator / commit-guard / pending-transition gating 제거
+- `B4`: full system
 
 ## 4. 메트릭 계산
 
@@ -91,7 +97,16 @@ print(metrics)
 
 `stale_commit_abort_rate`는 persisted `ABORTED` action record를 기준으로 계산합니다.
 
-`prompt_tokens_per_turn`와 `decision_latency_ms`는 집계 함수는 들어 있지만, 실제 LLM client 로그를 sidecar 실험에 자동 수집하는 경로는 별도로 연결해야 합니다.
+`prompt_tokens_per_turn`와 `decision_latency_ms`는 Gemini JSONL log를 merge해서 계산할 수 있습니다.
+
+```bash
+./scripts/run_gemini_headless_demo.sh goto_hold_land
+
+uv run python scripts/export_gemini_metrics.py \
+  --replay-jsonl artifacts/replay/gemini_goto_hold_land_YYYYMMDD_HHMMSS.jsonl \
+  --gemini-log artifacts/logs/gemini_goto_hold_land_YYYYMMDD_HHMMSS.jsonl \
+  --output artifacts/metrics/gemini_goto_hold_land.json
+```
 
 ## 5. Ubuntu 실험 시 기록할 것
 
@@ -105,11 +120,13 @@ print(metrics)
 - opened / closed obligations
 - geofence / tool_registry revision 변화
 - replay JSONL 산출물
+- Gemini CLI JSONL log와 metrics export JSON
 
 ## 6. 권장 실험 산출물
 
 - `artifacts/replay/*.jsonl`
 - `artifacts/metrics/*.json`
-- `artifacts/logs/*.txt`
+- `artifacts/logs/*.log`
 - 실험 당시 사용한 `configs/*.yaml`
+- 실험 당시 사용한 `configs/gemini_mcp*.json`
 - `ledger.tail` 캡처와 `control_view.get` / `action.execute_guarded` structured JSON 샘플

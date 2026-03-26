@@ -9,6 +9,9 @@ backend:
   offboard:
     stream_rate_hz: 20.0
     warmup_sec: 1.5
+  landing:
+    touchdown_altitude_m: 0.35
+    touchdown_speed_mps: 0.2
   pose_disagreement:
     position_tolerance_m: 0.75
     yaw_tolerance_rad: 0.6

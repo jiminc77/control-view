@@ -24,7 +24,6 @@ obligation_templates:
   - id: RTL_PENDING
     open_on: ACKED_WEAK
     close_when: [vehicle.mode == "AUTO.RTL"]
-    fail_when: [{not_confirmed_within_sec: 2.0}]
+    fail_when: [{not_confirmed_within_sec: 5.0}]
 safe_hold_mapping:
   backend_action: HOLD
-

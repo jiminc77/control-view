@@ -248,6 +248,20 @@ class ControlViewService:
             if refresh
             else self.snapshots.get_many(non_contextual_slots)
         )
+        evidence_map.update(
+            self._context_dependencies(
+                compiled.required_slots,
+                evidence_map,
+                refresh=refresh,
+            )
+        )
+        evidence_map.update(
+            self._refresh_derived_required_slots(
+                compiled.required_slots,
+                evidence_map,
+                refresh=refresh,
+            )
+        )
         if family == "GOTO" and canonical_args and not arg_blockers:
             canonical_args = self._enrich_goto_args(canonical_args, evidence_map)
         if family != "GOTO":
@@ -259,6 +273,8 @@ class ControlViewService:
                     proposed_args,
                     evidence_map,
                 )
+            if family == "LAND" and not arg_blockers:
+                canonical_args = self._enrich_land_args(canonical_args, evidence_map)
             self.backend.prepare_control_view(family, canonical_args)
         backend_context = self.backend.get_runtime_context()
         evidence_map.update(
@@ -349,6 +365,49 @@ class ControlViewService:
             )
         return resolved
 
+    def _context_dependencies(
+        self,
+        required_slots: list[str],
+        evidence_map: dict[str, Any],
+        *,
+        refresh: bool,
+    ) -> dict[str, Any]:
+        dependency_ids: list[str] = []
+        for slot_id in required_slots:
+            field = self.bundle.fields[slot_id]
+            dependencies = (
+                list(field.derivation.get("dependencies", []))
+                if field.derivation
+                else []
+            )
+            for dependency in dependencies:
+                if dependency not in evidence_map and dependency not in dependency_ids:
+                    dependency_ids.append(dependency)
+        if not dependency_ids:
+            return {}
+        if refresh:
+            return self.materializer.refresh_slots(dependency_ids)
+        return self.snapshots.get_many(dependency_ids)
+
+    def _refresh_derived_required_slots(
+        self,
+        required_slots: list[str],
+        evidence_map: dict[str, Any],
+        *,
+        refresh: bool,
+    ) -> dict[str, Any]:
+        if not refresh:
+            return {}
+        derived_slots = [
+            slot_id
+            for slot_id in required_slots
+            if slot_id not in {"geofence.status", "nav.progress"}
+            and self.bundle.fields[slot_id].derivation
+        ]
+        if not derived_slots:
+            return {}
+        return self.materializer.derive_slots(derived_slots, evidence_map)
+
     def _store_context_slot(self, slot_id: str, value: dict[str, Any] | None) -> Any:
         raw_value = None
         if value is not None:
@@ -401,7 +460,7 @@ class ControlViewService:
         )
         current_mode = str(mode.value_json.get("value", mode.value_json))
 
-        if current_mode == "AUTO.LOITER" and speed_mps <= 0.3:
+        if current_mode in {"AUTO.LOITER", "AUTO.TAKEOFF"} and speed_mps <= 0.3:
             phase = "HOLDING"
         elif (
             distance_m is not None
@@ -619,6 +678,20 @@ class ControlViewService:
             "nav_timeout_sec": round(max(10.0, (2.0 * planned_distance_m) + 5.0), 3),
         }
         return enriched
+
+    def _enrich_land_args(
+        self,
+        canonical_args: dict[str, Any],
+        evidence_map: dict[str, Any],
+    ) -> dict[str, Any]:
+        current_z = abs(
+            float(deep_get(evidence_map.get("pose.local"), "value_json.position.z", 0.0))
+        )
+        land_timeout_sec = round(max(30.0, (current_z / 1.2) + 12.0), 3)
+        return {
+            **canonical_args,
+            "land_timeout_sec": land_timeout_sec,
+        }
 
     def _upsert_artifact(self, artifact_name: str, revision: int, payload: dict[str, Any]) -> None:
         previous = self.artifacts.get(artifact_name)

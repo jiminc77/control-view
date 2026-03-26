@@ -6,6 +6,13 @@
         "-lc",
         "cd \"${CONTROL_VIEW_ROOT:-$PWD}\" && uv run control-view-sidecar --root \"$PWD\" --backend \"${CONTROL_VIEW_BACKEND:-mavros}\" ${CONTROL_VIEW_RECORD_JSONL:+--record-jsonl \"$CONTROL_VIEW_RECORD_JSONL\"}"
       ]
+    },
+    "ros-mcp-server-readonly": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "${ROS_MCP_DEBUG_COMMAND:?set ROS_MCP_DEBUG_COMMAND to your read-only ros-mcp-server launch command}"
+      ]
     }
   }
 }

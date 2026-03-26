@@ -22,7 +22,7 @@ obligation_templates:
   - id: HOLD_PENDING
     open_on: ACKED_WEAK
     close_when:
-      - expr: vehicle.mode == "AUTO.LOITER" and nav.progress.phase == "HOLDING"
+      - expr: (vehicle.mode == "AUTO.LOITER" or vehicle.mode == "AUTO.TAKEOFF") and nav.progress.phase == "HOLDING"
         for_sec: 1.0
     fail_when:
       - not_confirmed_within_sec: 2.0

@@ -259,8 +259,8 @@ class ObligationEngine:
             return False
         started_ns = record.notes.get("touchdown_started_ns")
         if started_ns is None:
-            started_ns = int(record.created_mono_ns)
-            record.notes["touchdown_started_ns"] = started_ns
+            record.notes["touchdown_started_ns"] = now_ns
+            return False
         elapsed_sec = (now_ns - int(started_ns)) / 1_000_000_000
         return elapsed_sec > timeout_sec
 

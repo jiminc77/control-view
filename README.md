@@ -17,8 +17,13 @@ family-specific typed state만 유지하는 sidecar MCP server입니다.
 - SQLite store, artifact revision, lease, guarded executor, obligation lifecycle 완료
 - FastMCP tool surface와 `control-view-sidecar` 엔트리포인트 연결 완료
 - `MavrosBackend`는 ROS 2 Jazzy용 live adapter로 연결되며, startup wait, QoS 정합성, preview warmup, pre-dispatch abort persistence를 포함
-- replay / fault / oracle / metrics는 slot ablation, policy swap, stale-commit 집계까지 포함해 확장
-- 2026-03-26 live SITL 검증 기준 `ARM`, `TAKEOFF`, `LAND`는 `CONFIRMED`까지 확인했고, `GOTO`는 `ACT -> ACKED_WEAK`까지 진입했지만 현재 `no_progress_within_sec` expiry가 남아 있어 OFFBOARD motion tuning이 추가로 필요함
+- replay / fault / oracle / metrics는 slot ablation, `B2/B3/B4` policy swap, stale-commit 집계까지 포함해 확장
+- `ReplayRecorder`는 `control_view.get`, `action.execute_guarded`, artifact revision, ledger snapshot을 자동 JSONL로 기록
+- 2026-03-26 live SITL 검증 기준 `gz_x500 + MAVROS + sidecar`에서 아래 nominal missions를 end-to-end `CONFIRMED`까지 재현
+  - `ARM -> TAKEOFF -> HOLD -> LAND`
+  - `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`
+  - `ARM -> TAKEOFF -> GOTO -> RTL`
+- Gemini normal-mode / debug-mode용 MCP config와 headless demo script를 저장소 내부에 포함
 
 ## 빠른 시작
 
@@ -27,8 +32,9 @@ uv venv .venv --python 3.12 --system-site-packages
 source .venv/bin/activate
 uv sync --extra dev
 uv run pytest
-uv run ruff check src tests
+uv run ruff check src tests scripts/*.py
 uv run python -m control_view.app --backend fake --dry-run
+bash -n scripts/*.sh
 ```
 
 실제 ROS 2 Jazzy / PX4 SITL 실행 절차는 `docs/runbook_ko.md`에 정리합니다.
@@ -40,3 +46,19 @@ uv run python -m control_view.app --backend fake --dry-run
 
 - `docs/runbook_ko.md`: 코드 사용법, 로컬 개발, Ubuntu 실행 절차
 - `docs/experiments_ko.md`: replay, fault injection, metrics, 실험 산출물 정리
+- `docs/gemini_demo_prompt_ko.md`: headless Gemini demo prompt
+
+## 자동화 스크립트
+
+```bash
+./scripts/run_sitl_smoke.sh
+./scripts/run_gemini_headless_demo.sh goto_hold_land
+uv run python scripts/export_gemini_metrics.py \
+  --replay-jsonl artifacts/replay/gemini_goto_hold_land_*.jsonl \
+  --gemini-log artifacts/logs/gemini_goto_hold_land_*.jsonl \
+  --output artifacts/metrics/gemini_goto_hold_land.json
+```
+
+- `run_sitl_smoke.sh`는 PX4 SITL, MAVROS, sidecar dry-run, nominal mission runner를 한 번에 실행합니다.
+- `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남깁니다.
+- `run_gemini_headless_demo.sh`는 sidecar-only Gemini session을 실행하고 Gemini JSONL log를 metrics JSON으로 변환합니다.

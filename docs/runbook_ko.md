@@ -17,8 +17,9 @@ uv sync --extra dev
 
 ```bash
 uv run pytest
-uv run ruff check src tests
+uv run ruff check src tests scripts/*.py
 uv run python -m control_view.app --backend fake --dry-run
+bash -n scripts/*.sh
 ```
 
 ### Python API 예시
@@ -124,7 +125,35 @@ control-view-sidecar --root "$(pwd)" --backend mavros
 
 ```bash
 uv run python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
+uv run python -m control_view.app \
+  --root "$(pwd)" \
+  --backend mavros \
+  --record-jsonl artifacts/replay/manual_session.jsonl
 ```
+
+### one-command SITL smoke
+
+저장소 루트에서 아래 스크립트를 실행하면 PX4 SITL, MAVROS, sidecar dry-run, mission runner를 순서대로 기동합니다.
+
+```bash
+./scripts/run_sitl_smoke.sh
+```
+
+특정 mission만 돌릴 수도 있습니다.
+
+```bash
+./scripts/run_sitl_smoke.sh takeoff_hold_land
+./scripts/run_sitl_smoke.sh goto_hold_land
+./scripts/run_sitl_smoke.sh goto_rtl
+```
+
+산출물 경로:
+
+- `artifacts/replay/<mission>.jsonl`
+- `artifacts/metrics/<mission>.json`
+- `artifacts/logs/px4_sitl.log`
+- `artifacts/logs/mavros.log`
+- `artifacts/logs/<mission>.log`
 
 ### `ros-mcp-server` debug path
 
@@ -134,11 +163,17 @@ uv run python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
 
 ## 3. 2026-03-26 live SITL 검증 결과
 
-- Ubuntu 24.04 + ROS 2 Jazzy + PX4 `gz_x500` + MAVROS 조합에서 sidecar Python API로 검증했습니다.
+- Ubuntu 24.04 + ROS 2 Jazzy + PX4 `gz_x500` + MAVROS 조합에서 저장소 내부 smoke harness로 검증했습니다.
 - `ARM`: `ACKED_STRONG -> CONFIRMED`
 - `TAKEOFF(target_altitude=3.0)`: `ACKED_STRONG -> CONFIRMED`
-- `GOTO(target_pose.map=(1.5, 0.0, 3.0))`: `ACT -> ACKED_WEAK`까지는 재현됐고 stale-commit loop는 제거됐지만, 현재 run에서는 `{"no_progress_within_sec":3.0}`로 `EXPIRED`
+- `HOLD`: `ACKED_WEAK -> CONFIRMED`
+- `GOTO(target_pose.map=(x+2.0, y, z>=3.0))`: `ACKED_WEAK -> CONFIRMED`
+- `RTL`: `ACKED_WEAK -> CONFIRMED`
 - `LAND`: `ACKED_WEAK -> CONFIRMED`
+- nominal mission 3종 재현 완료
+  - `ARM -> TAKEOFF -> HOLD -> LAND`
+  - `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`
+  - `ARM -> TAKEOFF -> GOTO -> RTL`
 
 ## 4. 현재 구현 범위
 
@@ -155,11 +190,13 @@ uv run python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
   - obligation open/close + confirm/fail/expire transition
   - FastMCP tool surface + stdio app entrypoint
   - replay / fault / oracle / metrics surface
-  - live `ARM` / `TAKEOFF` / `LAND` SITL confirmation
+  - live SITL nominal mission 3종 confirmation
+  - `scripts/run_sitl_smoke.sh` SITL harness
+  - `scripts/run_gemini_headless_demo.sh` / `scripts/export_gemini_metrics.py`
+  - `configs/gemini_mcp.json` / `configs/gemini_mcp_debug.json`
 
 - 현재 제한
   - `failsafe.state`는 여전히 heuristic slot입니다
   - replay oracle은 rule-based baseline이며 learned/annotated decision oracle은 아닙니다
-  - `GOTO`는 live SITL에서 `ACKED_WEAK`까지 진입하지만 현재 OFFBOARD motion progress tuning이 더 필요합니다
-  - `HOLD`는 위 `GOTO` failure scenario에서는 `not_confirmed_within_sec` expiry로 떨어질 수 있습니다
-  - Gemini CLI normal-mode demo는 문서 기준 수동 연결 절차만 정리되어 있고, 저장소 내부에 별도 자동화 harness는 없습니다
+  - `ros-mcp-server` debug profile은 read-only launch command를 사용자가 `ROS_MCP_DEBUG_COMMAND`로 지정해야 합니다
+  - Gemini headless demo는 로컬에 `gemini` CLI가 설치되어 있어야 합니다

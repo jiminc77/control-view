@@ -150,4 +150,34 @@ def test_land_obligation_expires_if_touchdown_does_not_disarm(
 
     action = service.store.get_action(exec_result.action_id)
     assert action is not None
+    assert action.state == ActionState.ACKED_WEAK
+
+    fake_clock.set(11_700_000_000)
+    service.get_control_view("ARM")
+
+    action = service.store.get_action(exec_result.action_id)
+    assert action is not None
     assert action.state == ActionState.EXPIRED
+
+
+def test_rtl_obligation_allows_delayed_mode_confirmation(fake_clock: FakeClock) -> None:
+    backend = FakeBackend()
+    backend.set_slot("vehicle.connected", True)
+    backend.set_slot("vehicle.armed", True)
+    backend.set_slot("vehicle.mode", "OFFBOARD")
+    backend.set_slot("home.position", {"position": {"x": 0.0, "y": 0.0, "z": 0.0}})
+    backend.set_action_result("RTL", state=ActionState.ACKED_WEAK)
+
+    service = ControlViewService(ROOT, backend=backend)
+    rtl_view = service.get_control_view("RTL")
+    exec_result = service.execute_guarded("RTL", rtl_view.canonical_args, rtl_view.lease_token)
+
+    assert exec_result.status == ActionState.ACKED_WEAK
+
+    fake_clock.set(3_000_000_000)
+    backend.set_slot("vehicle.mode", "AUTO.RTL")
+    service.get_control_view("ARM")
+
+    action = service.store.get_action(exec_result.action_id)
+    assert action is not None
+    assert action.state == ActionState.CONFIRMED

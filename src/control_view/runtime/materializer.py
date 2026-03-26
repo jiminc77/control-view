@@ -24,11 +24,26 @@ class Materializer:
         self._event_bus = event_bus
 
     def refresh_slots(self, slot_ids: list[str]) -> dict[str, EvidenceEntry]:
-        current = self._snapshots.get_many(slot_ids)
-        backend_values = self._backend.get_current_snapshot(slot_ids)
+        dependency_ids: list[str] = []
+        for slot_id in slot_ids:
+            field = self._fields[slot_id]
+            dependencies = (
+                list(field.derivation.get("dependencies", []))
+                if field.derivation
+                else []
+            )
+            for dependency in dependencies:
+                if dependency not in slot_ids and dependency not in dependency_ids:
+                    dependency_ids.append(dependency)
+        expanded_slot_ids = list(slot_ids) + dependency_ids
+        current = self._snapshots.get_many(expanded_slot_ids)
+        backend_values = self._backend.get_current_snapshot(expanded_slot_ids)
         resolved: dict[str, EvidenceEntry] = {}
 
-        backend_first = sorted(slot_ids, key=lambda slot_id: self._fields[slot_id].owner.value)
+        backend_first = sorted(
+            expanded_slot_ids,
+            key=lambda slot_id: self._fields[slot_id].owner.value,
+        )
         for slot_id in backend_first:
             previous = current.get(slot_id)
             raw_value = backend_values.get(slot_id)
@@ -37,7 +52,7 @@ class Materializer:
             if raw_value is None:
                 raw_value = self._derive_slot(slot_id, {**current, **resolved})
             resolved[slot_id] = self.store_slot(slot_id, raw_value, previous=previous)
-        return resolved
+        return {slot_id: resolved[slot_id] for slot_id in slot_ids}
 
     def store_slot(
         self,
@@ -59,6 +74,20 @@ class Materializer:
             },
         )
         return entry
+
+    def derive_slots(
+        self,
+        slot_ids: list[str],
+        available: dict[str, EvidenceEntry],
+    ) -> dict[str, EvidenceEntry]:
+        resolved: dict[str, EvidenceEntry] = {}
+        for slot_id in slot_ids:
+            previous = self._snapshots.get(slot_id)
+            raw_value = self._derive_slot(slot_id, {**available, **resolved})
+            if raw_value is None:
+                continue
+            resolved[slot_id] = self.store_slot(slot_id, raw_value, previous=previous)
+        return resolved
 
     def _derive_slot(
         self,
