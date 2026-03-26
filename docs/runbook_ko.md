@@ -57,7 +57,6 @@ backend.set_slot(
 backend.set_slot("estimator.health", {"score": 0.99})
 backend.set_slot("geofence.status", {"target_inside": True, "artifact_revision": 1})
 backend.set_slot("failsafe.state", {"active": False})
-backend.set_slot("offboard.stream.ok", {"value": True, "publish_rate_hz": 20.0})
 backend.set_slot("vehicle.mode", "POSCTL")
 backend.set_slot("nav.progress", {"phase": "IN_PROGRESS", "distance_m": 5.0, "speed_mps": 0.1})
 
@@ -87,11 +86,31 @@ uv sync --extra dev
 2. PX4 SITL을 `gz_x500` 기준으로 실행합니다.
 
 ```bash
-make px4_sitl gz_x500
+HEADLESS=1 make px4_sitl gz_x500
 ```
 
-3. MAVROS bridge와 필요한 topics/services가 살아 있는지 확인합니다.
-4. `configs/backend_mavros.yaml` 기준으로 sidecar를 실행합니다.
+headless SITL에서는 PX4 shell에서 다음을 한 번 적용하면 datalink-loss auto-disarm을 피할 수 있습니다.
+
+```text
+param set NAV_DLL_ACT 0
+```
+
+3. MAVROS bridge를 실행합니다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14557
+```
+
+4. 필요한 topics/services가 살아 있는지 확인합니다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+ros2 topic echo /mavros/state --once
+ros2 topic echo /mavros/global_position/global --once
+```
+
+5. `configs/backend_mavros.yaml` 기준으로 sidecar를 실행합니다.
 
 ### sidecar 실행
 
@@ -113,7 +132,15 @@ uv run python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
 - debug mode: sidecar + `ros-mcp-server`를 read-only inspection용으로 병행
 - critical control truth는 sidecar snapshot이므로, raw ROS tool output을 primary memory로 사용하지 않습니다
 
-## 3. 현재 구현 범위
+## 3. 2026-03-26 live SITL 검증 결과
+
+- Ubuntu 24.04 + ROS 2 Jazzy + PX4 `gz_x500` + MAVROS 조합에서 sidecar Python API로 검증했습니다.
+- `ARM`: `ACKED_STRONG -> CONFIRMED`
+- `TAKEOFF(target_altitude=3.0)`: `ACKED_STRONG -> CONFIRMED`
+- `GOTO(target_pose.map=(1.5, 0.0, 3.0))`: `ACT -> ACKED_WEAK`까지는 재현됐고 stale-commit loop는 제거됐지만, 현재 run에서는 `{"no_progress_within_sec":3.0}`로 `EXPIRED`
+- `LAND`: `ACKED_WEAK -> CONFIRMED`
+
+## 4. 현재 구현 범위
 
 - 완료
   - field ontology 16개
@@ -124,14 +151,15 @@ uv run python -m control_view.app --root "$(pwd)" --backend mavros --dry-run
   - live `MavrosBackend`
   - materializer + contextual slot derivation
   - governor + canonical args + lease
-  - guarded executor
-  - obligation open/close
+  - guarded executor + pre-dispatch abort persistence
+  - obligation open/close + confirm/fail/expire transition
   - FastMCP tool surface + stdio app entrypoint
-  - replay / fault / metrics surface
+  - replay / fault / oracle / metrics surface
+  - live `ARM` / `TAKEOFF` / `LAND` SITL confirmation
 
 - 현재 제한
   - `failsafe.state`는 여전히 heuristic slot입니다
-  - replay oracle은 rule-based baseline이며, full decision-oracle 수준은 아닙니다
-  - action state는 `REQUESTED -> ACKED_* -> CONFIRMED/FAILED/EXPIRED` end-to-end 구분이 아직 완성되지 않았습니다
-  - required integration/replay test matrix는 일부만 구현되어 있습니다
-  - full PX4 SITL nominal mission과 Gemini CLI normal-mode demo는 아직 완료되지 않았습니다
+  - replay oracle은 rule-based baseline이며 learned/annotated decision oracle은 아닙니다
+  - `GOTO`는 live SITL에서 `ACKED_WEAK`까지 진입하지만 현재 OFFBOARD motion progress tuning이 더 필요합니다
+  - `HOLD`는 위 `GOTO` failure scenario에서는 `not_confirmed_within_sec` expiry로 떨어질 수 있습니다
+  - Gemini CLI normal-mode demo는 문서 기준 수동 연결 절차만 정리되어 있고, 저장소 내부에 별도 자동화 harness는 없습니다

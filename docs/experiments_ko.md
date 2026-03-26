@@ -8,6 +8,12 @@
 - `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`
 - `ARM -> TAKEOFF -> GOTO -> RTL`
 
+2026-03-26 live SITL 기준 현재 재현 상태는 다음과 같습니다.
+
+- `ARM -> TAKEOFF -> LAND`: sidecar 경유 `CONFIRMED`
+- `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`: `GOTO`가 `ACKED_WEAK`까지는 진입하지만 `no_progress_within_sec` expiry가 남아 있어 nominal success로 아직 닫히지 않음
+- `ARM -> TAKEOFF -> GOTO -> RTL`: 위와 같은 이유로 아직 미검증
+
 ## 2. fault injection 후보
 
 - `pose_message_delay`
@@ -24,7 +30,7 @@
 - `stale_transform`
 - `battery_reserve_drop`
 
-현재 코드는 `FaultInjector.apply(records, fault_name, **params)`로 fault annotation을 붙일 수 있습니다.
+현재 코드는 `FaultInjector.apply(records, fault_name, **params)`로 slot valid state, artifact revision, weak-ack record까지 실제로 변형할 수 있습니다.
 
 ```python
 from control_view.replay.fault_injector import FaultInjector
@@ -51,7 +57,15 @@ recorder.record_view_request("ARM", {})
 records = recorder.records
 
 runner = ReplayRunner(service)
-outputs = runner.replay(records)
+outputs = runner.replay(
+    records,
+    mode="single_step",
+    fault_injector=injector,
+    fault_name="tool_registry_revision_bump",
+    oracle=None,
+    slot_ablation=["pose.local"],
+    policy_swap="ttl_only",
+)
 ```
 
 ## 4. 메트릭 계산
@@ -75,8 +89,9 @@ print(metrics)
 - `prompt_tokens_per_turn`
 - `decision_latency_ms`
 
-`prompt_tokens_per_turn`와 `decision_latency_ms`는 현재 집계 함수는 있으나, 실제 mission run에서
-로그를 자동 수집하는 경로는 아직 별도로 붙여야 합니다.
+`stale_commit_abort_rate`는 persisted `ABORTED` action record를 기준으로 계산합니다.
+
+`prompt_tokens_per_turn`와 `decision_latency_ms`는 집계 함수는 들어 있지만, 실제 LLM client 로그를 sidecar 실험에 자동 수집하는 경로는 별도로 연결해야 합니다.
 
 ## 5. Ubuntu 실험 시 기록할 것
 
