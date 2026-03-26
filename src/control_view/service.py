@@ -22,6 +22,7 @@ from control_view.contracts.models import (
     LeaseToken,
     RefreshResult,
 )
+from control_view.replay.recorder import ReplayRecorder
 from control_view.runtime.blockers import make_blocker
 from control_view.runtime.event_bus import EventBus
 from control_view.runtime.executor import Executor
@@ -43,6 +44,7 @@ class ControlViewService:
         backend: BackendAdapter | None = None,
         sqlite_path: str | Path = ":memory:",
         lease_secret: str | None = None,
+        recorder: ReplayRecorder | None = None,
     ) -> None:
         self.root = root
         self.bundle = load_contract_bundle(root)
@@ -63,6 +65,7 @@ class ControlViewService:
         self.governor = Governor(self.bundle.fields)
         self.obligations = ObligationEngine(self.store, event_bus=self.event_bus)
         self.global_fix_provider = GlobalFixProvider(self.backend)
+        self.recorder = recorder
         secret = lease_secret or os.environ.get(
             "CONTROL_VIEW_LEASE_SECRET",
             "control-view-dev-secret",
@@ -122,7 +125,16 @@ class ControlViewService:
         family: str,
         proposed_args: dict[str, Any] | None = None,
     ) -> ControlViewResult:
-        return self._evaluate_family(family, proposed_args or {}, refresh=True)
+        proposed = proposed_args or {}
+        if self.recorder is not None:
+            self.recorder.record_view_request(family, proposed)
+        result = self._evaluate_family(family, proposed, refresh=True)
+        if self.recorder is not None:
+            payload = result.model_dump(mode="json")
+            payload["artifact_revisions"] = self.artifacts.list_all()
+            self.recorder.record_view_result(family, payload)
+            self.recorder.record_ledger_snapshot(self.ledger_tail(last_n=20))
+        return result
 
     def refresh_control_view(
         self,
@@ -152,7 +164,23 @@ class ControlViewService:
         canonical_args: dict[str, Any],
         lease_token: LeaseToken,
     ) -> ExecutionResult:
-        return self.executor.execute_guarded(family, canonical_args, lease_token)
+        if self.recorder is not None:
+            self.recorder.record_execute_request(
+                family,
+                canonical_args,
+                lease_token.model_dump(mode="json"),
+            )
+        result = self.executor.execute_guarded(family, canonical_args, lease_token)
+        if self.recorder is not None:
+            self.recorder.record_execution_result(family, result.model_dump(mode="json"))
+            action = self.store.get_action(result.action_id)
+            if action is not None:
+                self.recorder.record_action_transition(
+                    family,
+                    action.model_dump(mode="json"),
+                )
+            self.recorder.record_ledger_snapshot(self.ledger_tail(last_n=20))
+        return result
 
     def explain_blockers(
         self,
@@ -604,6 +632,8 @@ class ControlViewService:
                     "revision": revision,
                 },
             )
+            if self.recorder is not None:
+                self.recorder.record_artifact_revision(artifact_name, revision)
 
     def _artifact_revision(self, artifact_name: str) -> int:
         artifact = self.artifacts.get(artifact_name)

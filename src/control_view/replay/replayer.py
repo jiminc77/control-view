@@ -6,10 +6,26 @@ from typing import Any
 from control_view.contracts.models import LeaseToken
 from control_view.replay.oracle import RuleBasedOracle
 from control_view.replay.recorder import ReplayRecord
+from control_view.runtime.action_state import ack_state_for_family
 from control_view.service import ControlViewService
 
 
 class ReplayRunner:
+    _HIGH_RISK = {"TAKEOFF", "GOTO", "RTL", "LAND"}
+    _B2_IGNORED_BLOCKERS = {
+        "missing_slot",
+        "stale_slot",
+        "invalidated_slot",
+        "disagreed_slot",
+        "unconfirmed_slot",
+        "pending_transition",
+    }
+    _B3_IGNORED_BLOCKERS = {
+        "invalidated_slot",
+        "disagreed_slot",
+        "pending_transition",
+    }
+
     def __init__(self, service: ControlViewService) -> None:
         self._service = service
 
@@ -52,6 +68,7 @@ class ReplayRunner:
                 continue
             output["scheduled_delay_ms"] = round(delay_ms, 3)
             if policy_swap:
+                self._apply_policy_swap(output, policy_swap)
                 output["policy_swap"] = policy_swap
             if record.get("fault_injection"):
                 output["fault_injection"] = record["fault_injection"]
@@ -129,3 +146,44 @@ class ReplayRunner:
             for slot_id in slot_ids:
                 bucket.pop(slot_id, None)
         output["ablated_slots"] = sorted(set(slot_ids))
+
+    def _apply_policy_swap(self, output: dict[str, Any], policy_swap: str) -> None:
+        if policy_swap == "B4":
+            return
+        if "verdict" in output and "blockers" in output:
+            ignored_blockers = self._ignored_blockers_for(policy_swap)
+            blockers = [
+                blocker
+                for blocker in output.get("blockers", [])
+                if blocker.get("kind") not in ignored_blockers
+            ]
+            output["blockers"] = blockers
+            if "pending_transition" in ignored_blockers:
+                output["open_obligations"] = []
+            output["verdict"] = self._policy_verdict(
+                output.get("family", ""),
+                blockers,
+            )
+        if (
+            "status" in output
+            and policy_swap in {"B2", "B3"}
+            and output.get("status") == "ABORTED"
+        ):
+            output["status"] = ack_state_for_family(output.get("family", "")).value
+            output["abort_reason"] = None
+
+    def _ignored_blockers_for(self, policy_swap: str) -> set[str]:
+        if policy_swap == "B2":
+            return self._B2_IGNORED_BLOCKERS
+        if policy_swap == "B3":
+            return self._B3_IGNORED_BLOCKERS
+        return set()
+
+    def _policy_verdict(self, family: str, blockers: list[dict[str, Any]]) -> str:
+        if not blockers:
+            return "ACT"
+        if all(blocker.get("refreshable", False) for blocker in blockers):
+            return "REFRESH"
+        if family in self._HIGH_RISK:
+            return "SAFE_HOLD"
+        return "REFUSE"
