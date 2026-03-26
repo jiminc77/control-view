@@ -28,6 +28,7 @@ class MavrosBackend(BackendAdapter):
         self._current_yaw: float | None = None
         self._extended_state: dict[str, Any] = {"landed_state": None}
         self._active_target_pose: JSONDict | None = None
+        self._preview_target_pose: JSONDict | None = None
         self._active_takeoff: JSONDict | None = None
         self._battery_reserve_fraction = 0.20
         self._offboard_worker = OffboardStreamWorker(self._publish_setpoint)
@@ -74,62 +75,77 @@ class MavrosBackend(BackendAdapter):
         from geometry_msgs.msg import PoseStamped, TwistStamped
         from mavros_msgs.msg import EstimatorStatus, ExtendedState, HomePosition, State, StatusText
         from nav_msgs.msg import Odometry
+        from rclpy.qos import (
+            DurabilityPolicy,
+            HistoryPolicy,
+            QoSProfile,
+            ReliabilityPolicy,
+            qos_profile_sensor_data,
+        )
         from sensor_msgs.msg import BatteryState, NavSatFix
 
-        self._node.create_subscription(State, f"{namespace}/state", self._on_state, 10)
+        state_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        sensor_qos = qos_profile_sensor_data
+
+        self._node.create_subscription(State, f"{namespace}/state", self._on_state, state_qos)
         self._node.create_subscription(
             Odometry,
             f"{namespace}/local_position/odom",
             self._on_odom,
-            10,
+            sensor_qos,
         )
         self._node.create_subscription(
             PoseStamped,
             f"{namespace}/local_position/pose",
             self._on_pose_fallback,
-            10,
+            sensor_qos,
         )
         self._node.create_subscription(
             TwistStamped,
             f"{namespace}/local_position/velocity_local",
             self._on_velocity,
-            10,
+            sensor_qos,
         )
         self._node.create_subscription(
             EstimatorStatus,
             f"{namespace}/estimator_status",
             self._on_estimator_status,
-            10,
+            sensor_qos,
         )
         self._node.create_subscription(
             StatusText,
             f"{namespace}/statustext/recv",
             self._on_status_text,
-            10,
+            sensor_qos,
         )
         self._node.create_subscription(
             HomePosition,
             f"{namespace}/home_position/home",
             self._on_home_position,
-            10,
+            state_qos,
         )
         self._node.create_subscription(
             NavSatFix,
             f"{namespace}/global_position/global",
             self._on_global_fix,
-            10,
+            sensor_qos,
         )
         self._node.create_subscription(
             BatteryState,
             f"{namespace}/battery",
             self._on_battery_state,
-            10,
+            sensor_qos,
         )
         self._node.create_subscription(
             ExtendedState,
             f"{namespace}/extended_state",
             self._on_extended_state,
-            10,
+            state_qos,
         )
         self._subscriptions_ready = True
 
@@ -193,6 +209,19 @@ class MavrosBackend(BackendAdapter):
             authority_source="mavros/state",
             source_header_stamp=stamp,
         )
+        with self._lock:
+            has_failsafe = "failsafe.state" in self._snapshot_cache
+        if not has_failsafe:
+            self._cache_slot(
+                "failsafe.state",
+                {
+                    "active": False,
+                    "source": "mavros_statustext_default",
+                    "text": "",
+                },
+                authority_source="mavros/statustext_default",
+                source_header_stamp=stamp,
+            )
 
     def _pose_payload(
         self,
@@ -399,8 +428,59 @@ class MavrosBackend(BackendAdapter):
         with self._lock:
             self._snapshot_cache[slot_id] = value
 
+    def _offboard_params(self, canonical_args: JSONDict | None) -> tuple[JSONDict | None, float, float]:
+        args = canonical_args or {}
+        target_pose = args.get("target_pose")
+        if not isinstance(target_pose, dict):
+            return None, 20.0, float(self.config.get("offboard", {}).get("warmup_sec", 1.0))
+        rate_hz = float(args.get("stream_rate_hz", 20.0))
+        warmup_sec = float(self.config.get("offboard", {}).get("warmup_sec", 1.0))
+        return target_pose, rate_hz, warmup_sec
+
+    def _ensure_offboard_stream(
+        self,
+        target_pose: JSONDict,
+        *,
+        rate_hz: float,
+        warmup_sec: float,
+    ) -> bool:
+        snapshot = self._offboard_worker.snapshot_value()
+        same_target = self._preview_target_pose == target_pose or self._active_target_pose == target_pose
+        if not same_target or not snapshot.get("value", False):
+            self._offboard_worker.start(target_pose, rate_hz=rate_hz, warmup_sec=warmup_sec)
+        deadline = time.monotonic() + max(self._timeout("goto_sec", 3.0), warmup_sec + 0.5)
+        while time.monotonic() < deadline:
+            if self._offboard_worker.snapshot_value().get("value", False):
+                return True
+            time.sleep(0.05)
+        return False
+
+    def prepare_control_view(
+        self,
+        family: str,
+        canonical_args: JSONDict | None = None,
+    ) -> None:
+        self._ensure_runtime()
+        if family != "GOTO":
+            if self._preview_target_pose is not None and self._active_target_pose is None:
+                self._preview_target_pose = None
+                self._offboard_worker.stop()
+            return
+        target_pose, rate_hz, warmup_sec = self._offboard_params(canonical_args)
+        if target_pose is None:
+            if self._preview_target_pose is not None and self._active_target_pose is None:
+                self._preview_target_pose = None
+                self._offboard_worker.stop()
+            return
+        self._preview_target_pose = target_pose
+        if not self._ensure_offboard_stream(target_pose, rate_hz=rate_hz, warmup_sec=warmup_sec):
+            self._preview_target_pose = None
+            if self._active_target_pose is None:
+                self._offboard_worker.stop()
+
     def get_current_snapshot(self, slot_ids: list[str]) -> dict[str, BackendSlotValue | None]:
         self._ensure_runtime()
+        self._wait_for_slots(slot_ids, timeout_sec=float(self.config.get("startup_wait_sec", 2.0)))
         return {slot_id: self.refresh_slot(slot_id) for slot_id in slot_ids}
 
     def refresh_slot(self, slot_id: str) -> BackendSlotValue | None:
@@ -411,6 +491,19 @@ class MavrosBackend(BackendAdapter):
                 value=snapshot,
                 authority_source="offboard_stream_worker",
                 reason_codes=["offboard_stream_lost"] if not snapshot.get("value", False) else [],
+            )
+        if slot_id == "failsafe.state":
+            with self._lock:
+                cached = self._snapshot_cache.get(slot_id)
+            if cached is not None:
+                return cached
+            return BackendSlotValue(
+                value={
+                    "active": False,
+                    "source": "mavros_statustext_default",
+                    "text": "",
+                },
+                authority_source="mavros/statustext_default",
             )
         with self._lock:
             return self._snapshot_cache.get(slot_id)
@@ -498,6 +591,24 @@ class MavrosBackend(BackendAdapter):
         timeouts = self.config.get("timeouts", {})
         return float(timeouts.get(key, timeouts.get("default_sec", default)))
 
+    def _wait_for_slots(self, slot_ids: list[str], timeout_sec: float) -> None:
+        if timeout_sec <= 0.0:
+            return
+        wait_for = {
+            slot_id
+            for slot_id in slot_ids
+            if slot_id not in {"offboard.stream.ok", "geofence.status", "nav.progress", "tool_registry.rev", "mission.spec.rev"}
+        }
+        if not wait_for:
+            return
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            with self._lock:
+                ready = wait_for.issubset(self._snapshot_cache)
+            if ready:
+                return
+            time.sleep(0.05)
+
     def set_mode(self, mode: str) -> BackendActionResult:
         from mavros_msgs.srv import SetMode
 
@@ -568,44 +679,49 @@ class MavrosBackend(BackendAdapter):
         )
 
     def goto(self, target_pose: JSONDict, canonical_args: JSONDict) -> BackendActionResult:
+        _, rate_hz, warmup_sec = self._offboard_params(canonical_args)
         self._active_target_pose = target_pose
-        rate_hz = float(canonical_args.get("stream_rate_hz", 20.0))
-        warmup_sec = float(self.config.get("offboard", {}).get("warmup_sec", 1.0))
-        self._offboard_worker.start(target_pose, rate_hz=rate_hz, warmup_sec=warmup_sec)
-        deadline = time.monotonic() + self._timeout("goto_sec", 3.0)
-        while time.monotonic() < deadline:
-            if self._offboard_worker.snapshot_value().get("value"):
-                break
-            time.sleep(0.05)
-        if not self._offboard_worker.snapshot_value().get("value"):
+        self._preview_target_pose = None
+        if not self._ensure_offboard_stream(target_pose, rate_hz=rate_hz, warmup_sec=warmup_sec):
             self._offboard_worker.stop()
+            self._active_target_pose = None
             return BackendActionResult(
                 state=ActionState.FAILED,
                 response={"target_pose": target_pose},
                 reason_codes=["offboard_warmup_failed"],
             )
-        return self.set_mode("OFFBOARD")
+        result = self.set_mode("OFFBOARD")
+        if result.state != ActionState.ACKED_WEAK:
+            self._active_target_pose = None
+        return result
 
     def hold(self) -> BackendActionResult:
         self._active_target_pose = None
+        self._preview_target_pose = None
         self._offboard_worker.stop()
         return self.set_mode("AUTO.LOITER")
 
     def rtl(self) -> BackendActionResult:
         self._active_target_pose = None
+        self._preview_target_pose = None
         self._offboard_worker.stop()
         return self.set_mode("AUTO.RTL")
 
     def land(self) -> BackendActionResult:
         self._active_target_pose = None
+        self._preview_target_pose = None
         self._offboard_worker.stop()
         return self.set_mode("AUTO.LAND")
 
     def shutdown(self) -> None:
+        self._preview_target_pose = None
         self._offboard_worker.stop()
         if self._executor is not None:
             self._executor.shutdown()
             self._executor = None
+        if self._spin_thread is not None and self._spin_thread.is_alive():
+            self._spin_thread.join(timeout=1.0)
+        self._spin_thread = None
         if self._node is not None:
             self._node.destroy_node()
             self._node = None

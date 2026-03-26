@@ -38,6 +38,33 @@ class Executor:
         self._family_contracts = family_contracts
         self._lease_manager = lease_manager
 
+    def _store_terminal_action(
+        self,
+        *,
+        action_id: str,
+        family: str,
+        canonical_args: dict,
+        status: ActionState,
+        reason_code: str,
+    ) -> ExecutionResult:
+        requested_mono_ns = monotonic_ns()
+        self._store.upsert_action(
+            ActionRecord(
+                action_id=action_id,
+                family=family,
+                requested_mono_ns=requested_mono_ns,
+                state=status,
+                backend_request_json=canonical_args,
+                failure_reason_codes=[reason_code],
+            )
+        )
+        return ExecutionResult(
+            status=status,
+            action_id=action_id,
+            opened_obligation_ids=[],
+            abort_reason=reason_code,
+        )
+
     def execute_guarded(
         self,
         family: str,
@@ -46,32 +73,36 @@ class Executor:
     ) -> ExecutionResult:
         action_id = str(uuid4())
         if lease_token.family != family:
-            return ExecutionResult(
-                status=ActionState.ABORTED,
+            return self._store_terminal_action(
                 action_id=action_id,
-                opened_obligation_ids=[],
-                abort_reason="lease_family_mismatch",
+                family=family,
+                canonical_args=canonical_args,
+                status=ActionState.ABORTED,
+                reason_code="lease_family_mismatch",
             )
         if not self._lease_manager.verify_signature(lease_token):
-            return ExecutionResult(
-                status=ActionState.ABORTED,
+            return self._store_terminal_action(
                 action_id=action_id,
-                opened_obligation_ids=[],
-                abort_reason="lease_signature_invalid",
+                family=family,
+                canonical_args=canonical_args,
+                status=ActionState.ABORTED,
+                reason_code="lease_signature_invalid",
             )
         if monotonic_ns() > lease_token.expires_mono_ns:
-            return ExecutionResult(
-                status=ActionState.EXPIRED,
+            return self._store_terminal_action(
                 action_id=action_id,
-                opened_obligation_ids=[],
-                abort_reason="lease_expired",
+                family=family,
+                canonical_args=canonical_args,
+                status=ActionState.EXPIRED,
+                reason_code="lease_expired",
             )
         if self._lease_manager.canonical_arg_hash(canonical_args) != lease_token.arg_hash:
-            return ExecutionResult(
-                status=ActionState.ABORTED,
+            return self._store_terminal_action(
                 action_id=action_id,
-                opened_obligation_ids=[],
-                abort_reason="canonical_arg_hash_mismatch",
+                family=family,
+                canonical_args=canonical_args,
+                status=ActionState.ABORTED,
+                reason_code="canonical_arg_hash_mismatch",
             )
 
         view = self._evaluate_family(
@@ -83,18 +114,20 @@ class Executor:
         for slot_id, expected_revision in lease_token.critical_slot_revisions.items():
             entry = view.critical_slots.get(slot_id)
             if entry and entry.revision != expected_revision:
-                return ExecutionResult(
-                    status=ActionState.ABORTED,
+                return self._store_terminal_action(
                     action_id=action_id,
-                    opened_obligation_ids=[],
-                    abort_reason=f"critical_slot_revision_changed:{slot_id}",
+                    family=family,
+                    canonical_args=canonical_args,
+                    status=ActionState.ABORTED,
+                    reason_code=f"critical_slot_revision_changed:{slot_id}",
                 )
         if view.verdict.value != "ACT":
-            return ExecutionResult(
-                status=ActionState.ABORTED,
+            return self._store_terminal_action(
                 action_id=action_id,
-                opened_obligation_ids=[],
-                abort_reason="guard_recheck_failed",
+                family=family,
+                canonical_args=canonical_args,
+                status=ActionState.ABORTED,
+                reason_code="guard_recheck_failed",
             )
 
         requested_mono_ns = monotonic_ns()

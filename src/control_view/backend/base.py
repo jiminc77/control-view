@@ -25,6 +25,13 @@ class BackendActionResult:
 
 
 class BackendAdapter(ABC):
+    def prepare_control_view(
+        self,
+        family: str,
+        canonical_args: JSONDict | None = None,
+    ) -> None:
+        return None
+
     @abstractmethod
     def get_current_snapshot(self, slot_ids: list[str]) -> dict[str, BackendSlotValue | None]:
         raise NotImplementedError

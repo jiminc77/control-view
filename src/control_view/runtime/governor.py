@@ -94,7 +94,10 @@ def evaluate_expression(
         canonical_args=canonical_args,
         backend_context=backend_context,
     )
-    result = eval(normalize_bool_literals(expression), {"__builtins__": {}}, vars(context))
+    try:
+        result = eval(normalize_bool_literals(expression), {"__builtins__": {}}, vars(context))
+    except (AttributeError, KeyError, NameError, TypeError):
+        return False
     if isinstance(result, ExpressionValue):
         return bool(result)
     return bool(result)

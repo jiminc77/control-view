@@ -195,7 +195,15 @@ class ControlViewService:
     ) -> ControlViewResult:
         contract = self.bundle.families[family]
         compiled = self.compiled[family]
-        backend_context = self.backend.get_runtime_context()
+        canonical_args: dict[str, Any] = {}
+        arg_blockers: list[Blocker] = []
+        if family == "GOTO":
+            if canonical_input:
+                canonical_args = proposed_args
+            else:
+                canonical_args, arg_blockers = self._canonicalize_goto(proposed_args)
+            if not arg_blockers:
+                self.backend.prepare_control_view(family, canonical_args)
         non_contextual_slots = [
             slot_id
             for slot_id in compiled.required_slots
@@ -206,11 +214,13 @@ class ControlViewService:
             if refresh
             else self.snapshots.get_many(non_contextual_slots)
         )
-        if canonical_input:
-            canonical_args = proposed_args
-            arg_blockers = []
-        else:
-            canonical_args, arg_blockers = self._canonicalize(family, proposed_args, evidence_map)
+        if family != "GOTO":
+            if canonical_input:
+                canonical_args = proposed_args
+            else:
+                canonical_args, arg_blockers = self._canonicalize(family, proposed_args, evidence_map)
+            self.backend.prepare_control_view(family, canonical_args)
+        backend_context = self.backend.get_runtime_context()
         evidence_map.update(
             self._materialize_contextual_slots(
                 family,
@@ -242,12 +252,13 @@ class ControlViewService:
         lease_expires_in_ms = None
         if evaluation.verdict == Verdict.ACT:
             lease_ms = self._lease_duration_ms(compiled.commit_guard_slots)
+            revision_slots = self._lease_revision_slots(compiled.commit_guard_slots)
             now_ns = monotonic_ns()
             lease_token = self.lease_manager.issue(
                 family,
                 critical_slot_revisions={
                     slot_id: evidence_map[slot_id].revision
-                    for slot_id in compiled.commit_guard_slots
+                    for slot_id in revision_slots
                 },
                 canonical_args=canonical_args,
                 issued_mono_ns=now_ns,
@@ -402,6 +413,14 @@ class ControlViewService:
             for slot_id in slot_ids
         ]
         return min(lease_values) if lease_values else 250
+
+    def _lease_revision_slots(self, slot_ids: list[str]) -> list[str]:
+        return [
+            slot_id
+            for slot_id in slot_ids
+            if self.bundle.fields[slot_id].revision_rule != "increment_on_every_accepted_sample"
+            and slot_id != "offboard.stream.ok"
+        ]
 
     def _canonicalize(
         self,

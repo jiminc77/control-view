@@ -16,6 +16,28 @@ class FakeBackend(BackendAdapter):
         self._yaw: float | None = None
         self._runtime_context: JSONDict = {"signals": {}}
 
+    def prepare_control_view(
+        self,
+        family: str,
+        canonical_args: JSONDict | None = None,
+    ) -> None:
+        if family != "GOTO":
+            return
+        target_pose = (canonical_args or {}).get("target_pose")
+        if not isinstance(target_pose, dict):
+            return
+        if "offboard.stream.ok" not in self._slots:
+            self.set_slot(
+                "offboard.stream.ok",
+                {
+                    "value": True,
+                    "publish_rate_hz": float((canonical_args or {}).get("stream_rate_hz", 20.0)),
+                    "last_publish_age_ms": 10.0,
+                    "warmup_elapsed_ms": 1000.0,
+                },
+                authority_source="fake_backend/offboard_preview",
+            )
+
     def set_slot(
         self,
         slot_id: str,

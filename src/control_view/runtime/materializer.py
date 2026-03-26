@@ -119,15 +119,16 @@ class Materializer:
         revision = 1
         field = self._fields[slot_id]
         if previous:
-            changed = (
+            material_changed = (
                 previous.value_json != value_json
+                or previous.authority_source != raw_value.authority_source
                 or previous.frame_id != raw_value.frame_id
-                or previous.source_header_stamp != raw_value.source_header_stamp
                 or previous.reason_codes != raw_value.reason_codes
             )
-            if field.revision_rule == "increment_on_every_accepted_sample" and changed:
+            sample_changed = material_changed or previous.source_header_stamp != raw_value.source_header_stamp
+            if field.revision_rule == "increment_on_every_accepted_sample" and sample_changed:
                 revision = previous.revision + 1
-            elif field.revision_rule != "increment_on_every_accepted_sample" and changed:
+            elif field.revision_rule != "increment_on_every_accepted_sample" and material_changed:
                 revision = previous.revision + 1
             else:
                 revision = previous.revision
