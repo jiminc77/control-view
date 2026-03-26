@@ -27,3 +27,7 @@ pytest
 
 실제 ROS 2 Jazzy / PX4 SITL 실행 가이드는 문서가 더 준비되면 `docs/`에 정리합니다.
 
+## 문서
+
+- `docs/runbook_ko.md`: 코드 사용법, 로컬 개발, Ubuntu 실행 절차
+- `docs/experiments_ko.md`: replay, fault injection, metrics, 실험 산출물 정리
