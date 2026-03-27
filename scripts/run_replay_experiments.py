@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from control_view.baselines import BASELINE_NAMES, normalize_baseline_name
 from control_view.backend.fake_backend import FakeBackend
+from control_view.baselines import BASELINE_NAMES, normalize_baseline_name
 from control_view.replay.fault_injector import FaultInjector
 from control_view.replay.metrics import compute_metrics
 from control_view.replay.oracle import RuleBasedOracle

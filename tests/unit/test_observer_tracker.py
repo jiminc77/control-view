@@ -141,7 +141,16 @@ def test_goto_hold_land_tracks_arrival_and_excursion() -> None:
 def test_tracker_detects_fault_and_recovery() -> None:
     tracker = MissionObserverTracker("goto_rtl")
     tracker.process(
-        _sample(0, mode="AUTO.LOITER", armed=True, on_ground=False, x=0.0, y=0.0, z=3.0, speed_mps=0.0)
+        _sample(
+            0,
+            mode="AUTO.LOITER",
+            armed=True,
+            on_ground=False,
+            x=0.0,
+            y=0.0,
+            z=3.0,
+            speed_mps=0.0,
+        )
     )
     tracker.process(
         _sample(

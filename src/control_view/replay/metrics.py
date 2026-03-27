@@ -342,21 +342,29 @@ def compute_metrics(
     )
     mission_prompt_tokens: dict[str, float] = defaultdict(float)
     for record in turn_records:
-        mission_prompt_tokens[_mission_id(record)] += float(_value(record, "prompt_tokens_per_turn") or 0.0)
+        mission_prompt_tokens[_mission_id(record)] += float(
+            _value(record, "prompt_tokens_per_turn") or 0.0
+        )
     mission_durations_ms = _mission_durations_ms(records)
     mission_success_map: dict[str, bool] = {}
     if observer_total:
         for record in _observer_summaries(records):
             mission_success_map[_mission_id(record)] = bool(_value(record, "mission_success"))
     else:
-        boundary_records = [record for record in records if _record_type(record) == "mission_boundary"]
+        boundary_records = [
+            record for record in records if _record_type(record) == "mission_boundary"
+        ]
         for record in boundary_records:
             if _value(record, "phase") == "end" and _value(record, "success") is not None:
                 mission_success_map[_mission_id(record)] = bool(_value(record, "success"))
     token_budget_successes = sum(
         1
         for mission_id, success in mission_success_map.items()
-        if success and (token_budget is None or mission_prompt_tokens.get(mission_id, 0.0) <= token_budget)
+        if success
+        and (
+            token_budget is None
+            or mission_prompt_tokens.get(mission_id, 0.0) <= token_budget
+        )
     )
     time_budget_successes = sum(
         1

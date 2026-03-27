@@ -1,8 +1,9 @@
-Control View sidecar만 사용해서 PX4 SITL 미션을 감독하세요.
+full `Control View` sidecar만 사용해서 PX4 SITL 미션을 감독하세요.
 
 이 프롬프트는 `scripts/run_gemini_headless_demo.sh`가 mission 이름을 뒤에 붙여 Gemini CLI에 전달합니다.
 
 규칙:
+- 현재 baseline은 `B3`입니다.
 - raw ROS browsing은 하지 마세요.
 - 먼저 `control_view.get`으로 각 family의 verdict와 blockers를 확인하세요.
 - `ACT`일 때만 `action.execute_guarded`를 호출하세요.

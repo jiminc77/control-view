@@ -1,30 +1,31 @@
 # Control View Sidecar
 
-`Control View`는 PX4 + MAVROS 기반 드론 supervisory control을 위해, transcript 대신
-family-specific typed state만 유지하는 sidecar MCP server입니다.
+`Control View`는 PX4 + MAVROS 기반 드론 supervisory control을 위해 transcript 대신
+family-specific typed state를 유지하는 sidecar MCP server입니다. 현재 저장소는 runtime
+자체뿐 아니라 replay baseline, Gemini headless baseline, observer-based 공통 채점까지
+같이 다룹니다.
 
-현재 저장소는 다음 목표를 중심으로 구현됩니다.
+핵심 목표는 다음입니다.
 
 - family contract와 field ontology를 YAML로 관리
 - runtime에서 현재 `Control View`를 materialize
-- validity governor, lease, obligation semantics를 통해 guarded execution 수행
-- MCP tool surface로 Gemini CLI 같은 LLM client에 strict typed snapshot 제공
-- PX4 SITL + Gazebo + ROS 2 Jazzy 환경에서 replay와 mission validation 지원
+- validity governor, lease, obligation semantics로 guarded execution 수행
+- Gemini CLI 같은 LLM client에 baseline별 MCP surface 제공
+- PX4 SITL + Gazebo + ROS 2 Jazzy 환경에서 replay / live validation / observer scoring 지원
 
 ## 현재 상태
 
-- contracts / compiler / validation 완료
-- SQLite store, artifact revision, lease, guarded executor, obligation lifecycle 완료
-- FastMCP tool surface와 `control-view-sidecar` 엔트리포인트 연결 완료
-- `MavrosBackend`는 ROS 2 Jazzy용 live adapter로 연결되며, startup wait, QoS 정합성, preview warmup, pre-dispatch abort persistence를 포함
-- replay / fault / oracle / metrics는 slot ablation, `B2/B3/B4` policy swap, stale-commit 집계까지 포함해 확장
-- `ReplayRecorder`는 decision request/result뿐 아니라 normalized event, action transition, obligation transition, mission boundary까지 JSONL로 기록
-- metrics는 mission-level success, terminal action transition, weak-ack-without-confirm을 terminal state 기준으로 계산
+- contracts / compiler / validation / runtime / guarded executor / obligation lifecycle 구현 완료
+- `MavrosBackend`는 ROS 2 Jazzy live adapter로 연결되며 preview warmup과 pre-dispatch abort persistence를 포함
+- replay harness는 `B1/B2/B3` baseline remap, slot ablation, oracle labels, fault injection을 지원
+- `B0/B1/B3` Gemini baseline은 headless script와 MCP config로 실행 가능
+- `B2`는 live Gemini baseline이 아니라 replay-only structured-cache baseline으로 유지
+- observer node가 `B0/B1/B3`와 무관하게 동일한 ROS topic stream을 관찰해 mission success와 recovery를 기록
+- `ReplayRecorder`는 decision request/result, action transition, obligation transition, mission boundary, observer event/summary를 JSONL로 기록
 - 2026-03-26 live SITL 검증 기준 `gz_x500 + MAVROS + sidecar`에서 아래 nominal missions를 end-to-end `CONFIRMED`까지 재현
-  - `ARM -> TAKEOFF -> HOLD -> LAND`
-  - `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`
-  - `ARM -> TAKEOFF -> GOTO -> RTL`
-- Gemini normal-mode / debug-mode용 MCP config와 headless demo script를 저장소 내부에 포함
+- `ARM -> TAKEOFF -> HOLD -> LAND`
+- `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`
+- `ARM -> TAKEOFF -> GOTO -> RTL`
 
 ## 빠른 시작
 
@@ -35,19 +36,27 @@ uv sync --extra dev
 uv run pytest
 uv run ruff check src tests scripts/*.py
 uv run python -m control_view.app --backend fake --dry-run
+uv run control-view-observer --help
 bash -n scripts/*.sh
 ```
-
-실제 ROS 2 Jazzy / PX4 SITL 실행 절차는 `docs/runbook_ko.md`에 정리합니다.
 
 `--system-site-packages`를 유지하는 이유는 ROS 2 Jazzy가 시스템 Python에 설치한
 `rclpy`, `mavros_msgs` 등을 그대로 재사용해야 하기 때문입니다.
 
+## Baselines
+
+- `B0`: raw `ros-mcp-server` + transcript/session-summary memory
+- `B1`: thin high-level family API + transcript/session-summary memory
+- `B2`: replay-only simple structured-cache baseline
+- `B3`: full `Control View` system
+
 ## 문서
 
-- `docs/runbook_ko.md`: 코드 사용법, 로컬 개발, Ubuntu 실행 절차
-- `docs/experiments_ko.md`: replay, fault injection, metrics, 실험 산출물 정리
-- `docs/gemini_demo_prompt_ko.md`: headless Gemini demo prompt
+- `docs/runbook_ko.md`: 로컬 개발, sidecar/observer 실행, SITL 절차
+- `docs/experiments_ko.md`: replay/live baseline 실험, observer artifact, metrics 해석
+- `docs/gemini_demo_prompt_ko.md`: `B3` headless Gemini prompt
+- `docs/gemini_demo_prompt_b1_ko.md`: `B1` headless Gemini prompt
+- `docs/gemini_demo_prompt_b0_ko.md`: `B0` headless Gemini prompt
 
 ## 자동화 스크립트
 
@@ -55,18 +64,14 @@ bash -n scripts/*.sh
 ./scripts/run_sitl_smoke.sh
 uv run python scripts/run_replay_experiments.py \
   --replay-jsonl artifacts/replay/goto_hold_land.jsonl \
-  --policy-swap B4 \
+  --policy-swap B3 \
   --fault offboard_stream_loss \
   --output artifacts/metrics/goto_hold_land_offboard_stream_loss.json \
   --counterexamples-jsonl artifacts/replay/goto_hold_land_offboard_stream_loss_counterexamples.jsonl
-./scripts/run_gemini_headless_demo.sh goto_hold_land
-uv run python scripts/export_gemini_metrics.py \
-  --replay-jsonl artifacts/replay/gemini_goto_hold_land_*.jsonl \
-  --gemini-log artifacts/logs/gemini_goto_hold_land_*.jsonl \
-  --output artifacts/metrics/gemini_goto_hold_land.json
+BASELINE=B1 ./scripts/run_gemini_headless_demo.sh goto_hold_land
 ```
 
 - `run_sitl_smoke.sh`는 PX4 SITL, MAVROS, sidecar dry-run, nominal mission runner를 한 번에 실행합니다.
-- `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남기며 mission boundary와 terminal transition을 함께 기록합니다.
-- `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation을 적용하고 metrics/counterexample JSON을 생성합니다.
-- `run_gemini_headless_demo.sh`는 sidecar-only Gemini session을 실행하고 Gemini JSONL log를 metrics JSON으로 변환합니다.
+- `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남깁니다.
+- `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation, budget 조건을 적용합니다.
+- `run_gemini_headless_demo.sh`는 `B0/B1/B3` baseline 중 하나를 선택해 Gemini session과 observer를 함께 실행하고 metrics JSON을 생성합니다.

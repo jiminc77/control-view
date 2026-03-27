@@ -48,7 +48,11 @@ class ObserverNode:
         if self._node is None:
             return
         self._create_timer()
-        deadline = None if duration_sec is None else monotonic_ns() + int(duration_sec * 1_000_000_000)
+        deadline = (
+            None
+            if duration_sec is None
+            else monotonic_ns() + int(duration_sec * 1_000_000_000)
+        )
         while not self._stop_event.is_set():
             if deadline is not None and monotonic_ns() >= deadline:
                 break

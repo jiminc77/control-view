@@ -14,6 +14,15 @@ from control_view.service import ControlViewService
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _goto_args() -> dict[str, object]:
+    return {
+        "target_pose": {
+            "position": {"x": 2.0, "y": 0.0, "z": 3.0},
+            "frame_id": "map",
+        }
+    }
+
+
 def _build_service() -> ControlViewService:
     backend = FakeBackend()
     backend.set_slot("vehicle.connected", True)
@@ -44,7 +53,7 @@ def test_transcript_decision_payload_is_thin() -> None:
     payload = transcript_decision_payload(
         _build_service(),
         family="GOTO",
-        proposed_args={"target_pose": {"position": {"x": 2.0, "y": 0.0, "z": 3.0}, "frame_id": "map"}},
+        proposed_args=_goto_args(),
         baseline_policy="B1",
     )
 
@@ -58,7 +67,7 @@ def test_transcript_execute_payload_uses_runtime_and_returns_status() -> None:
     payload = transcript_execute_payload(
         _build_service(),
         family="GOTO",
-        proposed_args={"target_pose": {"position": {"x": 2.0, "y": 0.0, "z": 3.0}, "frame_id": "map"}},
+        proposed_args=_goto_args(),
         baseline_policy="B1",
     )
 
@@ -72,7 +81,7 @@ def test_transcript_status_payload_summarizes_pending_families() -> None:
     transcript_execute_payload(
         service,
         family="GOTO",
-        proposed_args={"target_pose": {"position": {"x": 2.0, "y": 0.0, "z": 3.0}, "frame_id": "map"}},
+        proposed_args=_goto_args(),
         baseline_policy="B1",
     )
 

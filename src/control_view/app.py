@@ -6,9 +6,9 @@ from typing import Any
 
 import yaml
 
-from control_view.baselines import BASELINE_NAMES, normalize_baseline_name
 from control_view.backend.fake_backend import FakeBackend
 from control_view.backend.mavros_backend import MavrosBackend
+from control_view.baselines import BASELINE_NAMES, normalize_baseline_name
 from control_view.mcp_server.server import build_server
 from control_view.replay.recorder import ReplayRecorder
 from control_view.service import ControlViewService
