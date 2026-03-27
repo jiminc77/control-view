@@ -54,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fault", default=None)
     parser.add_argument("--fault-param", action="append", default=[])
     parser.add_argument("--slot-ablation", action="append", default=[])
+    parser.add_argument("--token-budget", type=float, default=None)
+    parser.add_argument("--time-budget-ms", type=float, default=None)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--counterexamples-jsonl", type=Path, default=None)
     return parser
@@ -75,7 +77,11 @@ def main(argv: list[str] | None = None) -> int:
         policy_swap=normalize_baseline_name(args.policy_swap),
         oracle=RuleBasedOracle(),
     )
-    metrics = compute_metrics(outputs)
+    metrics = compute_metrics(
+        outputs,
+        token_budget=args.token_budget,
+        time_budget_ms=args.time_budget_ms,
+    )
     counterexamples = [
         output
         for output in outputs
@@ -89,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         "fault": args.fault,
         "fault_params": fault_params,
         "slot_ablation": args.slot_ablation,
+        "token_budget": args.token_budget,
+        "time_budget_ms": args.time_budget_ms,
         "output_count": len(outputs),
         "counterexample_count": len(counterexamples),
         "metrics": metrics,

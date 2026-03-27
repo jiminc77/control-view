@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from control_view.baselines import BASELINE_NAMES, normalize_baseline_name
 from control_view.backend.fake_backend import FakeBackend
 from control_view.backend.mavros_backend import MavrosBackend
 from control_view.mcp_server.server import build_server
@@ -57,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sqlite-path", default=None)
     parser.add_argument("--record-jsonl", type=Path, default=None)
+    parser.add_argument("--tool-surface", choices=["full", "thin"], default="full")
+    parser.add_argument("--baseline-policy", choices=list(BASELINE_NAMES), default="B3")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -86,7 +89,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(message)
     try:
-        build_server(service).run()
+        build_server(
+            service,
+            tool_surface=args.tool_surface,
+            baseline_policy=normalize_baseline_name(args.baseline_policy),
+        ).run()
     finally:
         if recorder is not None and args.record_jsonl is not None:
             recorder.dump_jsonl(args.record_jsonl)

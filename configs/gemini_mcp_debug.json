@@ -4,7 +4,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "cd \"${CONTROL_VIEW_ROOT:-$PWD}\" && uv run control-view-sidecar --root \"$PWD\" --backend \"${CONTROL_VIEW_BACKEND:-mavros}\" ${CONTROL_VIEW_RECORD_JSONL:+--record-jsonl \"$CONTROL_VIEW_RECORD_JSONL\"}"
+        "cd \"${CONTROL_VIEW_ROOT:-$PWD}\" && uv run control-view-sidecar --root \"$PWD\" --backend \"${CONTROL_VIEW_BACKEND:-mavros}\" --tool-surface full --baseline-policy B3 ${CONTROL_VIEW_RECORD_JSONL:+--record-jsonl \"$CONTROL_VIEW_RECORD_JSONL\"}"
       ]
     },
     "ros-mcp-server-readonly": {

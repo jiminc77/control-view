@@ -23,6 +23,7 @@ def test_load_gemini_turn_metrics_extracts_nested_usage(tmp_path) -> None:
             "prompt_tokens_per_turn": 123.0,
             "decision_latency_ms": 456.0,
             "compressed": True,
+            "recorded_mono_ns": 0,
         }
     ]
 

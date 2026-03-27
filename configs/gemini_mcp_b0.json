@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ros-mcp-server-raw": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "${ROS_MCP_BASELINE_COMMAND:?set ROS_MCP_BASELINE_COMMAND to your raw ros-mcp-server launch command}"
+      ]
+    }
+  }
+}

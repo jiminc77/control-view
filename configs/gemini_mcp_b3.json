@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "control-view-sidecar": {
+    "control-view-b3": {
       "command": "bash",
       "args": [
         "-lc",

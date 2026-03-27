@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "control-view-b1": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "cd \"${CONTROL_VIEW_ROOT:-$PWD}\" && uv run control-view-sidecar --root \"$PWD\" --backend \"${CONTROL_VIEW_BACKEND:-mavros}\" --tool-surface thin --baseline-policy B1 ${CONTROL_VIEW_RECORD_JSONL:+--record-jsonl \"$CONTROL_VIEW_RECORD_JSONL\"}"
+      ]
+    }
+  }
+}

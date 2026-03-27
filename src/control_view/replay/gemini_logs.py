@@ -23,6 +23,11 @@ _COMPRESSION_KEYS = {
     "compressed",
     "did_compress",
 }
+_TIMESTAMP_KEYS = {
+    "recorded_mono_ns",
+    "timestamp_ns",
+    "monotonic_ns",
+}
 _FAMILY_KEYS = {
     "family",
 }
@@ -98,6 +103,7 @@ def load_gemini_turn_metrics(path: str | Path) -> list[dict[str, Any]]:
             continue
         prompt_tokens = _first_number(payload, _PROMPT_TOKEN_KEYS)
         latency_ms = _first_number(payload, _LATENCY_KEYS)
+        recorded_mono_ns = _first_number(payload, _TIMESTAMP_KEYS)
         family = _first_text(payload, _FAMILY_KEYS)
         if prompt_tokens is None and latency_ms is None:
             continue
@@ -107,6 +113,7 @@ def load_gemini_turn_metrics(path: str | Path) -> list[dict[str, Any]]:
                 "prompt_tokens_per_turn": prompt_tokens or 0.0,
                 "decision_latency_ms": latency_ms or 0.0,
                 "compressed": _compressed(payload),
+                "recorded_mono_ns": int(recorded_mono_ns) if recorded_mono_ns is not None else 0,
             }
         )
     return metrics
