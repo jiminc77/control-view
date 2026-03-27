@@ -33,6 +33,8 @@ class ReplayRunner:
         latest_leases: dict[str, dict[str, Any]] = {}
         latest_args: dict[str, dict[str, Any]] = {}
         serialized = [record.model_dump(mode="json") for record in records]
+        normalized_event_history: list[dict[str, Any]] = []
+        artifact_revision_history: dict[str, list[int]] = {}
         if fault_injector is not None and fault_name:
             serialized = fault_injector.apply(serialized, fault_name, **(fault_params or {}))
         available_record_types = {
@@ -44,6 +46,11 @@ class ReplayRunner:
         active_oracle = oracle or RuleBasedOracle()
 
         for record in serialized:
+            self._update_histories(
+                record,
+                normalized_event_history=normalized_event_history,
+                artifact_revision_history=artifact_revision_history,
+            )
             current_mono_ns = int(record.get("recorded_mono_ns", 0))
             delay_ms = 0.0
             if previous_mono_ns is not None:
@@ -68,10 +75,16 @@ class ReplayRunner:
             if slot_ablation:
                 self._apply_slot_ablation(output, slot_ablation)
             if output.get("family") and "verdict" in output:
-                oracle_input = self._build_oracle_input(output, record)
+                oracle_input = self._build_oracle_input(
+                    output,
+                    record,
+                    normalized_event_history=normalized_event_history,
+                    artifact_revision_history=artifact_revision_history,
+                )
                 oracle_decision = active_oracle.evaluate(output["family"], oracle_input)
                 output["oracle_verdict"] = oracle_decision.verdict
                 output["oracle_blockers"] = oracle_decision.blockers
+                output["oracle_labels"] = oracle_decision.labels
             outputs.append(output)
             if single_step_count is not None and len(outputs) >= single_step_count:
                 break
@@ -158,7 +171,14 @@ class ReplayRunner:
             }
         return None
 
-    def _build_oracle_input(self, output: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    def _build_oracle_input(
+        self,
+        output: dict[str, Any],
+        record: dict[str, Any],
+        *,
+        normalized_event_history: list[dict[str, Any]],
+        artifact_revision_history: dict[str, list[int]],
+    ) -> dict[str, Any]:
         return {
             "critical_slots": output.get("critical_slots", {}),
             "support_slots": output.get("support_slots", {}),
@@ -166,7 +186,34 @@ class ReplayRunner:
             "canonical_args": output.get("canonical_args", {}),
             "blockers": output.get("blockers", []),
             "open_obligations": output.get("open_obligations", []),
+            "artifact_revisions": output.get("artifact_revisions", []),
+            "artifact_revision_history": {
+                key: list(values)
+                for key, values in artifact_revision_history.items()
+            },
+            "normalized_event_history": list(normalized_event_history),
+            "fault_name": (
+                record.get("fault_injection", {}) or {}
+            ).get("fault_name"),
+            "reason_code": (record.get("fault_injection", {}) or {}).get("reason_code"),
         }
+
+    def _update_histories(
+        self,
+        record: dict[str, Any],
+        *,
+        normalized_event_history: list[dict[str, Any]],
+        artifact_revision_history: dict[str, list[int]],
+    ) -> None:
+        record_type = record.get("record_type")
+        payload = record.get("payload", {})
+        if record_type == "normalized_event" and isinstance(payload, dict):
+            normalized_event_history.append(payload)
+        if record_type == "artifact_revision" and isinstance(payload, dict):
+            artifact_name = payload.get("artifact_name")
+            revision = payload.get("revision")
+            if isinstance(artifact_name, str) and revision is not None:
+                artifact_revision_history.setdefault(artifact_name, []).append(int(revision))
 
     def _apply_slot_ablation(self, output: dict[str, Any], slot_ids: list[str]) -> None:
         for bucket_name in ("critical_slots", "support_slots"):

@@ -10,6 +10,7 @@ class OracleDecision:
     verdict: str
     blockers: list[str]
     canonical_args: dict[str, Any]
+    labels: dict[str, bool]
 
 
 class RuleBasedOracle:
@@ -57,6 +58,27 @@ class RuleBasedOracle:
         entry = self._entry(full_state, slot_id)
         return entry.get("valid_state", "VALID") == "VALID"
 
+    def _has_reason_token(self, full_state: dict[str, Any], token: str) -> bool:
+        lowered = token.lower()
+        for key in ("fault_name", "reason_code"):
+            value = full_state.get(key)
+            if isinstance(value, str) and lowered in value.lower():
+                return True
+        for item in full_state.get("blockers", []):
+            if not isinstance(item, dict):
+                continue
+            joined = " ".join(
+                str(item.get(field, ""))
+                for field in ("kind", "message", "slot_id")
+            ).lower()
+            if lowered in joined:
+                return True
+        for item in full_state.get("normalized_event_history", []):
+            payload = item.get("payload", item)
+            if isinstance(payload, dict) and lowered in str(payload).lower():
+                return True
+        return False
+
     def evaluate(self, family: str, full_state: dict[str, Any]) -> OracleDecision:
         blockers = []
         if not self._valid(full_state, "vehicle.connected") or not bool(
@@ -88,9 +110,35 @@ class RuleBasedOracle:
                 verdict = "SAFE_HOLD"
             else:
                 verdict = "REFRESH"
+        nav_phase = str(self._value(full_state, "nav.progress", "phase") or "")
+        labels = {
+            "arrival": nav_phase == "ARRIVED" or bool(full_state.get("arrival_seen")),
+            "touchdown": bool(
+                self._value(full_state, "land", "on_ground")
+                or full_state.get("touchdown_seen")
+            ),
+            "no_progress": self._has_reason_token(full_state, "no_progress"),
+            "stale_action": (
+                any(
+                    blocker.get("kind") in {"stale_slot", "invalidated_slot"}
+                    for blocker in full_state.get("blockers", [])
+                    if isinstance(blocker, dict)
+                )
+                or self._has_reason_token(full_state, "stale")
+                or self._has_reason_token(full_state, "revision")
+            ),
+            "premature_transition": bool(full_state.get("open_obligations")) or any(
+                blocker.get("kind") == "pending_transition"
+                for blocker in full_state.get("blockers", [])
+                if isinstance(blocker, dict)
+            ),
+            "degraded_safe_outcome": bool(full_state.get("degraded_safe_outcome"))
+            or verdict == "SAFE_HOLD",
+        }
         return OracleDecision(
             family=family,
             verdict=verdict,
             blockers=blockers,
             canonical_args=full_state.get("canonical_args", {}),
+            labels=labels,
         )

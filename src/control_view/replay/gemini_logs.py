@@ -17,6 +17,12 @@ _LATENCY_KEYS = {
     "latency_ms",
     "latencyMs",
 }
+_COMPRESSION_KEYS = {
+    "compression_count",
+    "compressionCount",
+    "compressed",
+    "did_compress",
+}
 _FAMILY_KEYS = {
     "family",
 }
@@ -52,6 +58,30 @@ def _first_text(payload: dict[str, Any], keys: set[str]) -> str | None:
     return None
 
 
+def _contains_token(value: Any, token: str) -> bool:
+    lowered = token.lower()
+    if isinstance(value, dict):
+        return any(_contains_token(item, token) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_token(item, token) for item in value)
+    if isinstance(value, str):
+        return lowered in value.lower()
+    return False
+
+
+def _compressed(payload: dict[str, Any]) -> bool:
+    for key, value in _iter_scalars(payload):
+        if key not in _COMPRESSION_KEYS:
+            continue
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and float(value) > 0:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {"true", "compressed"}:
+            return True
+    return _contains_token(payload, "/compress") or _contains_token(payload, "compression")
+
+
 def load_gemini_turn_metrics(path: str | Path) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
     target = Path(path)
@@ -76,6 +106,7 @@ def load_gemini_turn_metrics(path: str | Path) -> list[dict[str, Any]]:
                 "family": family,
                 "prompt_tokens_per_turn": prompt_tokens or 0.0,
                 "decision_latency_ms": latency_ms or 0.0,
+                "compressed": _compressed(payload),
             }
         )
     return metrics
@@ -111,6 +142,7 @@ def merge_turn_metrics(
             float(turn_metric.get("decision_latency_ms", 0.0)),
             4,
         )
+        target["compressed"] = bool(turn_metric.get("compressed"))
         family = turn_metric.get("family")
         if family and not target.get("family"):
             target["family"] = family
