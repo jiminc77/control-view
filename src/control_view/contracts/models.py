@@ -162,6 +162,9 @@ class ControlViewResult(BaseModel):
     support_slots: dict[str, EvidenceEntry]
     blockers: list[Blocker]
     open_obligations: list[ObligationRecord]
+    commit_guard_slots: list[str] = Field(default_factory=list)
+    commit_guard_revisions: dict[str, int] = Field(default_factory=dict)
+    decision_context: JSONDict = Field(default_factory=dict)
     lease_token: LeaseToken | None = None
     lease_expires_in_ms: int | None = None
 

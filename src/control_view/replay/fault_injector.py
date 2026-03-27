@@ -42,6 +42,7 @@ class FaultInjector:
                 reason_code="stale_pose",
                 blocker_kind="stale_slot",
                 verdict="REFRESH",
+                stale_ms=float(payload.get("stale_ms", 1000)),
             )
             return
         if fault_name == "stale_transform":
@@ -249,6 +250,11 @@ class FaultInjector:
             return payload
         return record
 
+    def _decision_context(self, record: dict[str, Any]) -> dict[str, Any] | None:
+        target = self._target(record)
+        decision_context = target.get("decision_context")
+        return decision_context if isinstance(decision_context, dict) else None
+
     def _family(self, record: dict[str, Any]) -> str | None:
         family = record.get("family")
         if isinstance(family, str):
@@ -267,23 +273,25 @@ class FaultInjector:
         blocker_kind: str,
         verdict: str,
         forced_value: Any | None = None,
+        stale_ms: float | None = None,
     ) -> None:
         target = self._target(record)
-        slot = self._slot_entry(target, slot_id)
-        if slot is None:
+        slots = self._slot_entries(record, slot_id)
+        if not slots:
             return
-        slot["valid_state"] = valid_state
-        reason_codes = slot.setdefault("reason_codes", [])
-        if reason_code not in reason_codes:
-            reason_codes.append(reason_code)
-        if forced_value is not None:
-            value_json = slot.setdefault("value_json", {})
-            if "value" in value_json or not isinstance(value_json, dict):
-                slot["value_json"] = {"value": forced_value}
-            elif slot_id == "vehicle.connected":
-                value_json["value"] = forced_value
-            elif slot_id == "offboard.stream.ok":
-                value_json["value"] = forced_value
+        for slot in slots:
+            slot["valid_state"] = valid_state
+            reason_codes = slot.setdefault("reason_codes", [])
+            if reason_code not in reason_codes:
+                reason_codes.append(reason_code)
+            if stale_ms is not None and slot.get("received_mono_ns") is not None:
+                slot["received_mono_ns"] = int(slot["received_mono_ns"]) - int(stale_ms * 1_000_000)
+            if forced_value is not None:
+                value_json = slot.setdefault("value_json", {})
+                if "value" in value_json or not isinstance(value_json, dict):
+                    slot["value_json"] = {"value": forced_value}
+                elif slot_id in {"vehicle.connected", "offboard.stream.ok"}:
+                    value_json["value"] = forced_value
         blockers = target.setdefault("blockers", [])
         if isinstance(blockers, list) and not any(
             blocker.get("slot_id") == slot_id and blocker.get("kind") == blocker_kind
@@ -314,6 +322,22 @@ class FaultInjector:
                 return entry
         return None
 
+    def _slot_entries(self, record: dict[str, Any], slot_id: str) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        target = self._target(record)
+        direct_entry = self._slot_entry(target, slot_id)
+        if direct_entry is not None:
+            entries.append(direct_entry)
+        decision_context = self._decision_context(record)
+        if decision_context is None:
+            return entries
+        evidence_map = decision_context.get("evidence_map")
+        if isinstance(evidence_map, dict):
+            context_entry = evidence_map.get(slot_id)
+            if isinstance(context_entry, dict):
+                entries.append(context_entry)
+        return entries
+
     def _update_slot_field(
         self,
         record: dict[str, Any],
@@ -321,18 +345,16 @@ class FaultInjector:
         path: list[str],
         value: Any,
     ) -> None:
-        target = self._target(record)
-        entry = self._slot_entry(target, slot_id)
-        if entry is None:
-            return
-        cursor = entry.setdefault("value_json", {})
-        if not isinstance(cursor, dict):
-            return
-        for part in path[:-1]:
-            cursor = cursor.setdefault(part, {})
+        for entry in self._slot_entries(record, slot_id):
+            cursor = entry.setdefault("value_json", {})
             if not isinstance(cursor, dict):
-                return
-        cursor[path[-1]] = value
+                continue
+            for part in path[:-1]:
+                cursor = cursor.setdefault(part, {})
+                if not isinstance(cursor, dict):
+                    break
+            else:
+                cursor[path[-1]] = value
 
     def _bump_artifact_revision(
         self,
@@ -344,8 +366,26 @@ class FaultInjector:
         artifact_revisions = target.get("artifact_revisions")
         if not isinstance(artifact_revisions, list):
             artifact_revisions = record.get("artifact_revisions")
-        if not isinstance(artifact_revisions, list):
+        if isinstance(artifact_revisions, list):
+            self._set_artifact_revision(artifact_revisions, artifact_name, revision)
+            if target.get("artifact_revisions") is None and "artifact_revisions" not in target:
+                record["artifact_revisions"] = artifact_revisions
+        decision_context = self._decision_context(record)
+        if decision_context is None:
             return
+        context_revisions = decision_context.get("artifact_revisions")
+        if isinstance(context_revisions, list):
+            self._set_artifact_revision(context_revisions, artifact_name, revision)
+        revision_map = decision_context.setdefault("artifact_revision_map", {})
+        if isinstance(revision_map, dict):
+            revision_map[artifact_name] = revision
+
+    def _set_artifact_revision(
+        self,
+        artifact_revisions: list[dict[str, Any]],
+        artifact_name: str,
+        revision: int,
+    ) -> None:
         replaced = False
         for item in artifact_revisions:
             if not isinstance(item, dict) or item.get("artifact_name") != artifact_name:
@@ -355,16 +395,15 @@ class FaultInjector:
             if isinstance(payload, dict):
                 payload["revision"] = revision
             replaced = True
-        if not replaced:
-            artifact_revisions.append(
-                {
-                    "artifact_name": artifact_name,
-                    "revision": revision,
-                    "payload": {"revision": revision},
-                }
-            )
-        if target.get("artifact_revisions") is None and "artifact_revisions" not in target:
-            record["artifact_revisions"] = artifact_revisions
+        if replaced:
+            return
+        artifact_revisions.append(
+            {
+                "artifact_name": artifact_name,
+                "revision": revision,
+                "payload": {"revision": revision},
+            }
+        )
 
     def _set_action_state(
         self,

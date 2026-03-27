@@ -3,7 +3,12 @@ risk_class: medium
 argument_schema:
   type: object
   properties: {}
-guard_slots: [vehicle.connected, vehicle.mode, vehicle.armed]
+guard_slots:
+  - vehicle.connected
+  - vehicle.mode
+  - vehicle.armed
+  - mission.spec.rev
+  - tool_registry.rev
 support_slots: []
 confirm_slots: [vehicle.mode, nav.progress]
 diagnostic_slots: [velocity.local]

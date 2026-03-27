@@ -13,6 +13,8 @@ guard_slots:
   - pose.local
   - estimator.health
   - failsafe.state
+  - mission.spec.rev
+  - tool_registry.rev
 support_slots: [battery.margin]
 confirm_slots: [pose.local, velocity.local]
 diagnostic_slots: []

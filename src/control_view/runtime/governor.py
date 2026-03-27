@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -125,8 +126,16 @@ class Governor:
         open_obligations: list[ObligationRecord],
         extra_blockers: list[Blocker] | None = None,
         backend_context: dict[str, Any] | None = None,
+        now_mono_ns: int | None = None,
+        include_pending_transition_blocker: bool = True,
+        validity_resolver: Callable[
+            [FieldSpec, EvidenceEntry | None, str, int],
+            ValidState,
+        ]
+        | None = None,
     ) -> GovernorEvaluation:
         blockers = list(extra_blockers or [])
+        effective_now_ns = monotonic_ns() if now_mono_ns is None else now_mono_ns
         critical_slots = {
             slot_id: evidence_map[slot_id]
             for slot_id in compiled.role_partition["guard"]
@@ -141,13 +150,22 @@ class Governor:
         for slot_id in compiled.role_partition["guard"]:
             field = self._fields[slot_id]
             entry = evidence_map.get(slot_id)
-            state = self._resolve_valid_state(field, entry, contract.risk_class)
+            state = (
+                validity_resolver(field, entry, contract.risk_class, effective_now_ns)
+                if validity_resolver is not None
+                else self._resolve_valid_state(
+                    field,
+                    entry,
+                    contract.risk_class,
+                    now_mono_ns=effective_now_ns,
+                )
+            )
             if entry and state != entry.valid_state:
                 entry.valid_state = state
             if state != ValidState.VALID:
                 blockers.append(blocker_for_valid_state(slot_id, state, entry))
 
-        if open_obligations:
+        if include_pending_transition_blocker and open_obligations:
             blockers.append(
                 make_blocker(
                     slot_id="open_obligations",
@@ -195,6 +213,8 @@ class Governor:
         field: FieldSpec,
         entry: EvidenceEntry | None,
         risk_class: str,
+        *,
+        now_mono_ns: int | None = None,
     ) -> ValidState:
         if entry is None:
             return ValidState.MISSING
@@ -206,7 +226,8 @@ class Governor:
             return ValidState.INVALIDATED
         ttl_ms = deep_get(field.freshness, f"ttl_ms.{risk_class}")
         if ttl_ms is not None:
-            age_ms = (monotonic_ns() - entry.received_mono_ns) / 1_000_000
+            effective_now_ns = monotonic_ns() if now_mono_ns is None else now_mono_ns
+            age_ms = (effective_now_ns - entry.received_mono_ns) / 1_000_000
             if age_ms > float(ttl_ms):
                 return ValidState.STALE
         return ValidState.VALID

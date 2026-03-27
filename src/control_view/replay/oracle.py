@@ -15,8 +15,61 @@ class OracleDecision:
 
 class RuleBasedOracle:
     _HIGH_RISK = {"TAKEOFF", "GOTO", "RTL", "LAND"}
+    _FAMILY_GUARDS = {
+        "ARM": ["vehicle.connected"],
+        "TAKEOFF": [
+            "vehicle.connected",
+            "vehicle.armed",
+            "pose.local",
+            "estimator.health",
+            "failsafe.state",
+            "mission.spec.rev",
+            "tool_registry.rev",
+        ],
+        "GOTO": [
+            "vehicle.connected",
+            "vehicle.armed",
+            "pose.local",
+            "estimator.health",
+            "geofence.status",
+            "tf.local_body",
+            "failsafe.state",
+            "offboard.stream.ok",
+            "mission.spec.rev",
+            "tool_registry.rev",
+        ],
+        "HOLD": [
+            "vehicle.connected",
+            "vehicle.armed",
+            "vehicle.mode",
+            "mission.spec.rev",
+            "tool_registry.rev",
+        ],
+        "RTL": [
+            "vehicle.connected",
+            "vehicle.armed",
+            "home.ready",
+            "mission.spec.rev",
+            "tool_registry.rev",
+        ],
+        "LAND": [
+            "vehicle.connected",
+            "vehicle.armed",
+            "pose.local",
+            "estimator.health",
+            "mission.spec.rev",
+            "tool_registry.rev",
+        ],
+    }
+
+    def _evidence_map(self, full_state: dict[str, Any]) -> dict[str, Any]:
+        evidence_map = full_state.get("evidence_map")
+        return evidence_map if isinstance(evidence_map, dict) else {}
 
     def _entry(self, full_state: dict[str, Any], slot_id: str) -> dict[str, Any]:
+        evidence_map = self._evidence_map(full_state)
+        if slot_id in evidence_map and isinstance(evidence_map[slot_id], dict):
+            return evidence_map[slot_id]
         buckets = [
             full_state.get("critical_slots", {}),
             full_state.get("support_slots", {}),
@@ -79,19 +132,34 @@ class RuleBasedOracle:
                 return True
         return False
 
+    def _blocker_kind(self, blockers: list[dict[str, Any]], kind: str) -> bool:
+        return any(
+            blocker.get("kind") == kind
+            for blocker in blockers
+            if isinstance(blocker, dict)
+        )
+
+    def _required_boolean(self, full_state: dict[str, Any], slot_id: str) -> bool:
+        return self._valid(full_state, slot_id) and bool(self._value(full_state, slot_id))
+
     def evaluate(self, family: str, full_state: dict[str, Any]) -> OracleDecision:
-        blockers = []
-        if not self._valid(full_state, "vehicle.connected") or not bool(
-            self._value(full_state, "vehicle.connected")
+        blockers: list[str] = []
+        recorded_blockers = [
+            blocker
+            for blocker in full_state.get("blockers", [])
+            if isinstance(blocker, dict)
+        ]
+        for slot_id in self._FAMILY_GUARDS.get(family, []):
+            if not self._valid(full_state, slot_id):
+                blockers.append(slot_id)
+        if family in {"ARM", "TAKEOFF", "GOTO", "HOLD", "RTL", "LAND"} and not (
+            self._required_boolean(full_state, "vehicle.connected")
         ):
             blockers.append("vehicle.connected")
-        if family in {"TAKEOFF", "GOTO", "HOLD", "RTL", "LAND"} and (
-            not self._valid(full_state, "vehicle.armed")
-            or not bool(self._value(full_state, "vehicle.armed"))
+        if family in {"TAKEOFF", "GOTO", "HOLD", "RTL", "LAND"} and not (
+            self._required_boolean(full_state, "vehicle.armed")
         ):
             blockers.append("vehicle.armed")
-        if family == "RTL" and not bool(self._value(full_state, "home.ready", "ready")):
-            blockers.append("home.ready")
         if family in {"TAKEOFF", "GOTO", "LAND"}:
             score = float(self._value(full_state, "estimator.health", "score") or 0.0)
             if score < 0.8:
@@ -101,9 +169,21 @@ class RuleBasedOracle:
                 blockers.append("geofence.status")
             if bool(self._value(full_state, "failsafe.state", "active")):
                 blockers.append("failsafe.state")
+            if not self._required_boolean(full_state, "offboard.stream.ok"):
+                blockers.append("offboard.stream.ok")
+        if family == "RTL" and not bool(self._value(full_state, "home.ready", "ready")):
+            blockers.append("home.ready")
+        if full_state.get("open_obligations"):
+            blockers.append("open_obligations")
+        blockers = sorted(set(blockers))
         verdict = "ACT"
         if blockers:
-            safety_blockers = {"failsafe.state", "geofence.status"}
+            safety_blockers = {
+                "failsafe.state",
+                "geofence.status",
+                "open_obligations",
+                "offboard.stream.ok",
+            }
             if family in self._HIGH_RISK and any(
                 blocker in safety_blockers for blocker in blockers
             ):
@@ -119,19 +199,13 @@ class RuleBasedOracle:
             ),
             "no_progress": self._has_reason_token(full_state, "no_progress"),
             "stale_action": (
-                any(
-                    blocker.get("kind") in {"stale_slot", "invalidated_slot"}
-                    for blocker in full_state.get("blockers", [])
-                    if isinstance(blocker, dict)
-                )
+                self._blocker_kind(recorded_blockers, "stale_slot")
+                or self._blocker_kind(recorded_blockers, "invalidated_slot")
                 or self._has_reason_token(full_state, "stale")
                 or self._has_reason_token(full_state, "revision")
             ),
-            "premature_transition": bool(full_state.get("open_obligations")) or any(
-                blocker.get("kind") == "pending_transition"
-                for blocker in full_state.get("blockers", [])
-                if isinstance(blocker, dict)
-            ),
+            "premature_transition": bool(full_state.get("open_obligations"))
+            or self._blocker_kind(recorded_blockers, "pending_transition"),
             "degraded_safe_outcome": bool(full_state.get("degraded_safe_outcome"))
             or verdict == "SAFE_HOLD",
         }
@@ -139,6 +213,7 @@ class RuleBasedOracle:
             family=family,
             verdict=verdict,
             blockers=blockers,
-            canonical_args=full_state.get("canonical_args", {}),
+            canonical_args=full_state.get("recorded_canonical_args")
+            or full_state.get("canonical_args", {}),
             labels=labels,
         )

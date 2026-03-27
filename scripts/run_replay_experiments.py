@@ -51,9 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--replay-jsonl", type=Path, required=True)
     parser.add_argument("--policy-swap", choices=list(BASELINE_NAMES), default="B3")
+    parser.add_argument("--scenario", default=None)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--fault", default=None)
     parser.add_argument("--fault-param", action="append", default=[])
     parser.add_argument("--slot-ablation", action="append", default=[])
+    parser.add_argument("--b2-ttl-sec", type=float, default=5.0)
     parser.add_argument("--token-budget", type=float, default=None)
     parser.add_argument("--time-budget-ms", type=float, default=None)
     parser.add_argument("--output", type=Path, required=True)
@@ -76,7 +79,9 @@ def main(argv: list[str] | None = None) -> int:
         slot_ablation=args.slot_ablation,
         policy_swap=normalize_baseline_name(args.policy_swap),
         oracle=RuleBasedOracle(),
+        b2_ttl_sec=args.b2_ttl_sec,
     )
+    legacy_trace_count = sum(1 for output in outputs if bool(output.get("legacy_trace")))
     metrics = compute_metrics(
         outputs,
         token_budget=args.token_budget,
@@ -92,13 +97,18 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "replay_jsonl": str(args.replay_jsonl),
         "policy_swap": args.policy_swap,
+        "scenario": args.scenario,
+        "seed": args.seed,
         "fault": args.fault,
         "fault_params": fault_params,
         "slot_ablation": args.slot_ablation,
+        "b2_ttl_sec": args.b2_ttl_sec,
         "token_budget": args.token_budget,
         "time_budget_ms": args.time_budget_ms,
         "output_count": len(outputs),
         "counterexample_count": len(counterexamples),
+        "legacy_trace_count": legacy_trace_count,
+        "official_trace_ready": legacy_trace_count == 0,
         "metrics": metrics,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -10,16 +11,19 @@ from control_view.backend.base import BackendAdapter, BackendSlotValue
 from control_view.backend.fake_backend import FakeBackend
 from control_view.backend.global_fix_provider import GlobalFixProvider
 from control_view.backend.ros_mcp_debug_adapter import RosMcpDebugAdapter
+from control_view.baselines import normalize_baseline_name
 from control_view.common.time import monotonic_ns
-from control_view.common.types import EventType, Verdict
+from control_view.common.types import EventType, ValidState, Verdict
 from control_view.common.utils import deep_get, distance_3d, point_in_polygon, stable_revision
 from control_view.contracts.compiler import compile_bundle
 from control_view.contracts.loader import load_contract_bundle
 from control_view.contracts.models import (
     Blocker,
     ControlViewResult,
+    EvidenceEntry,
     ExecutionResult,
     LeaseToken,
+    ObligationRecord,
     RefreshResult,
 )
 from control_view.replay.recorder import ReplayRecorder
@@ -92,12 +96,36 @@ class ControlViewService:
         self._sync_system_slots()
 
     def _load_artifacts(self) -> None:
-        geofence_path = self.root / "artifacts" / "geofence.yaml"
-        if geofence_path.exists():
-            geofence = yaml.safe_load(geofence_path.read_text())
-            revision = int(geofence.get("revision", 1))
-            self._upsert_artifact("geofence", revision, geofence)
-        self._upsert_artifact("mission_spec", 0, {"revision": 0})
+        self._sync_artifacts_from_disk()
+
+    def _artifact_root(self) -> Path:
+        override = os.environ.get("CONTROL_VIEW_ARTIFACTS_DIR")
+        if override:
+            return Path(override)
+        return self.root / "artifacts"
+
+    def _sync_artifacts_from_disk(self) -> None:
+        artifact_root = self._artifact_root()
+        artifact_specs = {
+            "geofence": {
+                "path": artifact_root / "geofence.yaml",
+                "default_revision": 1,
+                "default_payload": {"revision": 1, "polygons": []},
+            },
+            "mission_spec": {
+                "path": artifact_root / "mission_spec.yaml",
+                "default_revision": 0,
+                "default_payload": {"revision": 0},
+            },
+        }
+        for artifact_name, config in artifact_specs.items():
+            path = config["path"]
+            if path.exists():
+                payload = yaml.safe_load(path.read_text()) or {}
+            else:
+                payload = deepcopy(config["default_payload"])
+            revision = int(payload.get("revision", config["default_revision"]))
+            self._upsert_artifact(artifact_name, revision, payload)
 
     def _sync_system_slots(self) -> None:
         debug_capabilities = self.debug_adapter.probe_runtime_capabilities()
@@ -130,6 +158,7 @@ class ControlViewService:
         family: str,
         proposed_args: dict[str, Any] | None = None,
     ) -> ControlViewResult:
+        self._sync_artifacts_from_disk()
         proposed = proposed_args or {}
         if self.recorder is not None:
             self.recorder.record_view_request(family, proposed)
@@ -137,6 +166,17 @@ class ControlViewService:
         if self.recorder is not None:
             payload = result.model_dump(mode="json")
             payload["artifact_revisions"] = self.artifacts.list_all()
+            payload["decision_context"] = deepcopy(result.decision_context)
+            payload["legacy_trace"] = False
+            scenario_id = self._recorder_metadata_value("scenario_id")
+            if scenario_id is not None:
+                payload["scenario_id"] = scenario_id
+            seed = self._recorder_metadata_value("seed")
+            if seed is not None:
+                payload["seed"] = seed
+            ground_truth_source = self._recorder_metadata_value("ground_truth_source")
+            if ground_truth_source is not None:
+                payload["ground_truth_source"] = ground_truth_source
             self.recorder.record_view_result(family, payload)
             self.recorder.record_ledger_snapshot(self.ledger_tail(last_n=20))
         return result
@@ -148,6 +188,7 @@ class ControlViewService:
         slots: list[str] | None = None,
         proposed_args: dict[str, Any] | None = None,
     ) -> RefreshResult:
+        self._sync_artifacts_from_disk()
         if slots:
             self.materializer.refresh_slots(slots)
         if family:
@@ -230,6 +271,16 @@ class ControlViewService:
         compiled = self.compiled[family]
         canonical_args: dict[str, Any] = {}
         arg_blockers: list[Blocker] = []
+        contextual_slot_ids = {
+            "geofence.status",
+            "nav.progress",
+            "tool_registry.rev",
+            "mission.spec.rev",
+        }
+        fill_context = {
+            "global_fix": self.global_fix_provider.current_fix(),
+            "current_yaw": self.global_fix_provider.current_yaw(),
+        }
         if family == "GOTO":
             if canonical_input:
                 canonical_args = proposed_args
@@ -240,7 +291,7 @@ class ControlViewService:
         non_contextual_slots = [
             slot_id
             for slot_id in compiled.required_slots
-            if slot_id not in {"geofence.status", "nav.progress"}
+            if slot_id not in contextual_slot_ids
         ]
         evidence_map = (
             self.materializer.refresh_slots(non_contextual_slots)
@@ -271,11 +322,12 @@ class ControlViewService:
                     family,
                     proposed_args,
                     evidence_map,
+                    fill_context=fill_context,
                 )
             if family == "LAND" and not arg_blockers:
                 canonical_args = self._enrich_land_args(canonical_args, evidence_map)
             self.backend.prepare_control_view(family, canonical_args)
-        backend_context = self.backend.get_runtime_context()
+        backend_context = deepcopy(self.backend.get_runtime_context())
         evidence_map.update(
             self._materialize_contextual_slots(
                 family,
@@ -305,21 +357,34 @@ class ControlViewService:
         )
         lease_token = None
         lease_expires_in_ms = None
+        evaluation_mono_ns = monotonic_ns()
+        commit_guard_revisions: dict[str, int] = {}
         if evaluation.verdict == Verdict.ACT:
             lease_ms = self._lease_duration_ms(compiled.commit_guard_slots)
             revision_slots = self._lease_revision_slots(compiled.commit_guard_slots)
-            now_ns = monotonic_ns()
+            commit_guard_revisions = {
+                slot_id: evidence_map[slot_id].revision
+                for slot_id in revision_slots
+                if slot_id in evidence_map
+            }
             lease_token = self.lease_manager.issue(
                 family,
-                critical_slot_revisions={
-                    slot_id: evidence_map[slot_id].revision
-                    for slot_id in revision_slots
-                },
+                critical_slot_revisions=commit_guard_revisions,
                 canonical_args=canonical_args,
-                issued_mono_ns=now_ns,
-                expires_mono_ns=now_ns + (lease_ms * 1_000_000),
+                issued_mono_ns=evaluation_mono_ns,
+                expires_mono_ns=evaluation_mono_ns + (lease_ms * 1_000_000),
             )
             lease_expires_in_ms = lease_ms
+        decision_context = self._build_decision_context(
+            family=family,
+            proposed_args=proposed_args,
+            canonical_args=canonical_args,
+            evidence_map=evidence_map,
+            open_obligations=open_obligations,
+            evaluation_mono_ns=evaluation_mono_ns,
+            backend_context=backend_context,
+            fill_context=fill_context,
+        )
         return ControlViewResult(
             family=family,
             verdict=evaluation.verdict,
@@ -328,9 +393,111 @@ class ControlViewService:
             support_slots=evaluation.support_slots,
             blockers=evaluation.blockers,
             open_obligations=open_obligations,
+            commit_guard_slots=list(compiled.commit_guard_slots),
+            commit_guard_revisions=commit_guard_revisions,
+            decision_context=decision_context,
             lease_token=lease_token,
             lease_expires_in_ms=lease_expires_in_ms,
         )
+
+    def replay_view_result(
+        self,
+        family: str,
+        decision_context: dict[str, Any],
+        *,
+        baseline: str | None = None,
+        slot_ablation: list[str] | None = None,
+        b2_ttl_sec: float = 5.0,
+        cached_slots: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        normalized_baseline = normalize_baseline_name(baseline)
+        compiled = self.compiled[family]
+        contract = self.bundle.families[family]
+        evaluation_mono_ns = int(decision_context.get("evaluation_mono_ns") or monotonic_ns())
+        evidence_source = (
+            cached_slots
+            if normalized_baseline == "B2" and cached_slots is not None
+            else decision_context.get("evidence_map", {})
+        )
+        evidence_map = self._evidence_entries_from_payload(evidence_source)
+        for slot_id in slot_ablation or []:
+            evidence_map.pop(slot_id, None)
+        canonical_args, arg_blockers = self._canonicalize_from_decision_context(
+            family,
+            decision_context,
+            evidence_map,
+        )
+        open_obligations = (
+            []
+            if normalized_baseline in {"B1", "B2"}
+            else [
+                ObligationRecord.model_validate(item)
+                for item in decision_context.get("open_obligations", [])
+            ]
+        )
+        backend_context = deepcopy(decision_context.get("backend_context", {}))
+        evaluation = self.governor.evaluate(
+            contract,
+            compiled,
+            evidence_map,
+            canonical_args=canonical_args,
+            open_obligations=open_obligations,
+            extra_blockers=arg_blockers,
+            backend_context=backend_context,
+            now_mono_ns=evaluation_mono_ns,
+            include_pending_transition_blocker=normalized_baseline == "B3",
+            validity_resolver=lambda field, entry, risk_class, now_ns: self._baseline_validity(
+                baseline=normalized_baseline,
+                field=field,
+                entry=entry,
+                risk_class=risk_class,
+                now_mono_ns=now_ns,
+                b2_ttl_sec=b2_ttl_sec,
+            ),
+        )
+        lease_token = None
+        lease_expires_in_ms = None
+        commit_guard_revisions: dict[str, int] = {}
+        if evaluation.verdict == Verdict.ACT:
+            lease_expires_in_ms = self._lease_duration_ms(compiled.commit_guard_slots)
+            revision_slots = self._lease_revision_slots(compiled.commit_guard_slots)
+            commit_guard_revisions = {
+                slot_id: evidence_map[slot_id].revision
+                for slot_id in revision_slots
+                if slot_id in evidence_map
+            }
+            if normalized_baseline == "B3":
+                lease_token = self.lease_manager.issue(
+                    family,
+                    critical_slot_revisions=commit_guard_revisions,
+                    canonical_args=canonical_args,
+                    issued_mono_ns=evaluation_mono_ns,
+                    expires_mono_ns=evaluation_mono_ns + (lease_expires_in_ms * 1_000_000),
+                )
+        result = ControlViewResult(
+            family=family,
+            verdict=evaluation.verdict,
+            canonical_args=canonical_args,
+            critical_slots=evaluation.critical_slots,
+            support_slots=evaluation.support_slots,
+            blockers=evaluation.blockers,
+            open_obligations=open_obligations,
+            commit_guard_slots=list(compiled.commit_guard_slots),
+            commit_guard_revisions=commit_guard_revisions,
+            lease_token=lease_token,
+            lease_expires_in_ms=lease_expires_in_ms,
+        )
+        payload = result.model_dump(mode="json")
+        payload["decision_context"] = deepcopy(decision_context)
+        payload["ground_truth_source"] = decision_context.get(
+            "ground_truth_source",
+            "decision_context",
+        )
+        payload["legacy_trace"] = False
+        if slot_ablation:
+            payload["ablated_slots"] = sorted(set(slot_ablation))
+        payload["policy_swap"] = normalized_baseline
+        return payload
 
     def _materialize_contextual_slots(
         self,
@@ -400,7 +567,13 @@ class ControlViewService:
         derived_slots = [
             slot_id
             for slot_id in required_slots
-            if slot_id not in {"geofence.status", "nav.progress"}
+            if slot_id
+            not in {
+                "geofence.status",
+                "nav.progress",
+                "tool_registry.rev",
+                "mission.spec.rev",
+            }
             and self.bundle.fields[slot_id].derivation
         ]
         if not derived_slots:
@@ -525,13 +698,19 @@ class ControlViewService:
         family: str,
         proposed_args: dict[str, Any],
         evidence_map: dict[str, Any],
+        *,
+        fill_context: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], list[Blocker]]:
         if family in {"ARM", "HOLD", "RTL", "LAND"}:
             if proposed_args:
                 return {}, [self._arg_conflict_blocker(family, sorted(proposed_args))]
             return {}, []
         if family == "TAKEOFF":
-            return self._canonicalize_takeoff(proposed_args, evidence_map)
+            return self._canonicalize_takeoff(
+                proposed_args,
+                evidence_map,
+                fill_context=fill_context,
+            )
         if family == "GOTO":
             return self._canonicalize_goto(proposed_args)
         return proposed_args, []
@@ -540,6 +719,8 @@ class ControlViewService:
         self,
         proposed_args: dict[str, Any],
         evidence_map: dict[str, Any],
+        *,
+        fill_context: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], list[Blocker]]:
         blockers: list[Blocker] = []
         server_controlled = {
@@ -568,8 +749,12 @@ class ControlViewService:
             )
             return {}, blockers
         pose = evidence_map.get("pose.local")
-        geo_reference = self.global_fix_provider.current_fix()
-        current_yaw = self.global_fix_provider.current_yaw()
+        geo_reference = (fill_context or {}).get("global_fix")
+        current_yaw = (fill_context or {}).get("current_yaw")
+        if geo_reference is None:
+            geo_reference = self.global_fix_provider.current_fix()
+        if current_yaw is None:
+            current_yaw = self.global_fix_provider.current_yaw()
         if pose is None or pose.value_json is None:
             blockers.append(
                 make_blocker(
@@ -721,3 +906,124 @@ class ControlViewService:
             refreshable=False,
             refresh_hint=f"remove {joined} from proposed_args",
         )
+
+    def _recorder_metadata_value(self, key: str) -> Any | None:
+        if self.recorder is None:
+            return None
+        return self.recorder.default_metadata.get(key)
+
+    def _build_decision_context(
+        self,
+        *,
+        family: str,
+        proposed_args: dict[str, Any],
+        canonical_args: dict[str, Any],
+        evidence_map: dict[str, EvidenceEntry],
+        open_obligations: list[ObligationRecord],
+        evaluation_mono_ns: int,
+        backend_context: dict[str, Any],
+        fill_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        compiled = self.compiled[family]
+        artifact_revisions = self.artifacts.list_all()
+        return {
+            "family": family,
+            "proposed_args": deepcopy(proposed_args),
+            "canonical_args": deepcopy(canonical_args),
+            "evaluation_mono_ns": evaluation_mono_ns,
+            "required_slots": list(compiled.required_slots),
+            "role_partition": deepcopy(compiled.role_partition),
+            "commit_guard_slots": list(compiled.commit_guard_slots),
+            "commit_guard_revisions": {
+                slot_id: evidence_map[slot_id].revision
+                for slot_id in self._lease_revision_slots(compiled.commit_guard_slots)
+                if slot_id in evidence_map
+            },
+            "evidence_map": {
+                slot_id: entry.model_dump(mode="json")
+                for slot_id, entry in evidence_map.items()
+            },
+            "backend_context": deepcopy(backend_context),
+            "open_obligations": [item.model_dump(mode="json") for item in open_obligations],
+            "artifact_revisions": deepcopy(artifact_revisions),
+            "artifact_revision_map": {
+                str(item["artifact_name"]): int(item["revision"])
+                for item in artifact_revisions
+                if item.get("artifact_name") is not None and item.get("revision") is not None
+            },
+            "fill_context": deepcopy(fill_context),
+            "scenario_id": self._recorder_metadata_value("scenario_id"),
+            "seed": self._recorder_metadata_value("seed"),
+            "ground_truth_source": self._recorder_metadata_value("ground_truth_source")
+            or "decision_context",
+        }
+
+    def _evidence_entries_from_payload(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, EvidenceEntry]:
+        evidence_map: dict[str, EvidenceEntry] = {}
+        for slot_id, entry in payload.items():
+            if not isinstance(entry, dict):
+                continue
+            evidence_map[str(slot_id)] = EvidenceEntry.model_validate(
+                {"slot_id": str(slot_id), **entry}
+            )
+        return evidence_map
+
+    def _canonicalize_from_decision_context(
+        self,
+        family: str,
+        decision_context: dict[str, Any],
+        evidence_map: dict[str, EvidenceEntry],
+    ) -> tuple[dict[str, Any], list[Blocker]]:
+        proposed_args = deepcopy(decision_context.get("proposed_args") or {})
+        fill_context = deepcopy(decision_context.get("fill_context") or {})
+        if family == "GOTO":
+            canonical_args, blockers = self._canonicalize_goto(proposed_args)
+            if blockers:
+                return {}, blockers
+            return self._enrich_goto_args(canonical_args, evidence_map), []
+        if family == "LAND":
+            canonical_args, blockers = self._canonicalize(
+                family,
+                proposed_args,
+                evidence_map,
+                fill_context=fill_context,
+            )
+            if blockers:
+                return {}, blockers
+            return self._enrich_land_args(canonical_args, evidence_map), []
+        return self._canonicalize(
+            family,
+            proposed_args,
+            evidence_map,
+            fill_context=fill_context,
+        )
+
+    def _baseline_validity(
+        self,
+        *,
+        baseline: str,
+        field,
+        entry: EvidenceEntry | None,
+        risk_class: str,
+        now_mono_ns: int,
+        b2_ttl_sec: float,
+    ) -> ValidState:
+        if entry is None:
+            return ValidState.MISSING
+        if baseline == "B3":
+            return self.governor._resolve_valid_state(  # noqa: SLF001
+                field,
+                entry,
+                risk_class,
+                now_mono_ns=now_mono_ns,
+            )
+        if entry.value_json is None:
+            return ValidState.MISSING
+        if baseline == "B2":
+            age_ms = (now_mono_ns - entry.received_mono_ns) / 1_000_000
+            if age_ms > float(b2_ttl_sec) * 1000.0:
+                return ValidState.STALE
+        return ValidState.VALID

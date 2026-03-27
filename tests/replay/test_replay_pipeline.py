@@ -120,6 +120,11 @@ def test_service_recorder_captures_requests_results_and_artifacts() -> None:
     assert "obligation_transition" in record_types
     assert "normalized_event" in record_types
     assert "ledger_snapshot" in record_types
+    result_record = next(
+        record for record in recorder.records if record.record_type == "control_view_result"
+    )
+    assert "decision_context" in result_record.payload
+    assert result_record.payload["legacy_trace"] is False
 
 
 def test_policy_swap_removes_stale_commit_abort() -> None:
@@ -175,3 +180,72 @@ def test_policy_swap_distinguishes_full_from_ttl_only_and_no_governor() -> None:
     assert b1_output[0]["verdict"] == Verdict.ACT.value
     assert b2_output[0]["verdict"] == Verdict.REFRESH.value
     assert b3_output[0]["verdict"] == Verdict.SAFE_HOLD.value
+
+
+def test_slot_ablation_recomputes_modern_trace_decision() -> None:
+    backend = FakeBackend()
+    backend.set_slot("vehicle.connected", True)
+    backend.set_slot("vehicle.mode", "MANUAL")
+    service = ControlViewService(ROOT, backend=backend)
+    recorder = ReplayRecorder()
+
+    view = service.get_control_view("ARM")
+    recorder.record_view_result("ARM", view.model_dump(mode="json"))
+
+    outputs = ReplayRunner(service).replay(recorder.records, slot_ablation=["vehicle.connected"])
+
+    assert outputs[0]["legacy_trace"] is False
+    assert outputs[0]["verdict"] == Verdict.REFRESH.value
+    assert outputs[0]["ablated_slots"] == ["vehicle.connected"]
+
+
+def test_b2_ttl_sensitivity_depends_on_stale_timestamp() -> None:
+    backend = FakeBackend()
+    backend.set_slot("vehicle.connected", True)
+    backend.set_slot("vehicle.armed", True)
+    backend.set_slot(
+        "pose.local",
+        {
+            "position": {"x": 0.0, "y": 0.0, "z": 3.0},
+            "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+            "frame_id": "map",
+        },
+        frame_id="map",
+    )
+    backend.set_slot("estimator.health", {"score": 0.95})
+    backend.set_slot("failsafe.state", {"active": False})
+    backend.set_slot("tf.local_body", {"ready": True})
+    backend.set_slot("vehicle.mode", "OFFBOARD")
+    service = ControlViewService(ROOT, backend=backend)
+    recorder = ReplayRecorder()
+
+    view = service.get_control_view(
+        "GOTO",
+        {
+            "target_pose": {
+                "position": {"x": 1.0, "y": 0.0, "z": 3.0},
+                "frame_id": "map",
+            }
+        },
+    )
+    recorder.record_view_result("GOTO", view.model_dump(mode="json"))
+
+    strict_output = ReplayRunner(service).replay(
+        recorder.records,
+        fault_injector=FaultInjector(),
+        fault_name="stale_pose",
+        fault_params={"stale_ms": 3000},
+        policy_swap="B2",
+        b2_ttl_sec=2.0,
+    )
+    relaxed_output = ReplayRunner(service).replay(
+        recorder.records,
+        fault_injector=FaultInjector(),
+        fault_name="stale_pose",
+        fault_params={"stale_ms": 3000},
+        policy_swap="B2",
+        b2_ttl_sec=10.0,
+    )
+
+    assert strict_output[0]["verdict"] == Verdict.REFRESH.value
+    assert relaxed_output[0]["verdict"] == Verdict.ACT.value

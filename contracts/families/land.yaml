@@ -9,6 +9,8 @@ guard_slots:
   - vehicle.armed
   - pose.local
   - estimator.health
+  - mission.spec.rev
+  - tool_registry.rev
 support_slots: []
 confirm_slots: [vehicle.armed, velocity.local]
 diagnostic_slots: []

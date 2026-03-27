@@ -21,6 +21,8 @@ guard_slots:
   - tf.local_body
   - failsafe.state
   - offboard.stream.ok
+  - mission.spec.rev
+  - tool_registry.rev
 support_slots: [battery.margin]
 confirm_slots: [vehicle.mode, nav.progress]
 diagnostic_slots: [velocity.local]
