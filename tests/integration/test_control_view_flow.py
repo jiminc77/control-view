@@ -70,6 +70,8 @@ def test_goto_view_and_execute_guarded() -> None:
     assert "pose.local" not in view.lease_token.critical_slot_revisions
     assert "offboard.stream.ok" not in view.lease_token.critical_slot_revisions
     assert "failsafe.state" in view.lease_token.critical_slot_revisions
+    assert "mission.spec.rev" in view.lease_token.critical_slot_revisions
+    assert "tool_registry.rev" in view.lease_token.critical_slot_revisions
 
     exec_result = service.execute_guarded("GOTO", view.canonical_args, view.lease_token)
 
@@ -108,6 +110,29 @@ def test_stale_commit_abort_is_persisted() -> None:
     assert action is not None
     assert action.state == ActionState.ABORTED
     assert action.failure_reason_codes == ["critical_slot_revision_changed:failsafe.state"]
+
+
+def test_tool_registry_revision_change_aborts_goto_commit() -> None:
+    service = build_goto_ready_service()
+
+    view = service.get_control_view(
+        "GOTO",
+        {"target_pose": {"position": {"x": 1.0, "y": 2.0, "z": 3.0}, "frame_id": "map"}},
+    )
+    service._upsert_artifact(  # noqa: SLF001
+        "tool_registry",
+        2,
+        {"revision": 2, "tools": service._tool_names(), "debug_capabilities": {}},  # noqa: SLF001
+    )
+
+    exec_result = service.execute_guarded("GOTO", view.canonical_args, view.lease_token)
+    action = service.store.get_action(exec_result.action_id)
+
+    assert exec_result.status == ActionState.ABORTED
+    assert exec_result.abort_reason == "critical_slot_revision_changed:tool_registry.rev"
+    assert action is not None
+    assert action.state == ActionState.ABORTED
+    assert action.failure_reason_codes == ["critical_slot_revision_changed:tool_registry.rev"]
 
 
 def test_goto_blocks_non_map_frame() -> None:
