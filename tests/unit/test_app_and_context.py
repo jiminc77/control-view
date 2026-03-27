@@ -75,6 +75,28 @@ def test_goto_geofence_is_derived_from_artifact() -> None:
     assert result.critical_slots["geofence.status"].value_json["artifact_revision"] == 1
 
 
+def test_goto_accepts_legacy_offboard_ok_shape() -> None:
+    service = build_context_service()
+    service.backend.set_slot(
+        "offboard.stream.ok",
+        {
+            "ok": True,
+            "publish_rate_hz": 20.0,
+            "last_publish_age_ms": 10.0,
+            "warmup_elapsed_ms": 1000.0,
+        },
+    )
+
+    result = service.get_control_view(
+        "GOTO",
+        {"target_pose": {"position": {"x": 1.0, "y": 2.0, "z": 3.0}, "frame_id": "map"}},
+    )
+
+    assert result.verdict == Verdict.ACT
+    assert result.critical_slots["offboard.stream.ok"].value_json["value"] is True
+    assert "ok" not in result.critical_slots["offboard.stream.ok"].value_json
+
+
 def test_hold_can_materialize_nav_progress_from_pose_dependency() -> None:
     service = build_context_service()
     service.backend.set_slot("vehicle.mode", "AUTO.LOITER")

@@ -145,6 +145,11 @@ class Materializer:
             )
 
         value_json = self._normalize_value(raw_value.value)
+        if slot_id == "offboard.stream.ok" and "value" not in value_json and "ok" in value_json:
+            value_json = {
+                "value": bool(value_json["ok"]),
+                **{key: item for key, item in value_json.items() if key != "ok"},
+            }
         revision = 1
         field = self._fields[slot_id]
         if previous:

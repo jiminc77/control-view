@@ -4,7 +4,7 @@ owner: sidecar
 value_schema:
   type: object
   properties:
-    ok: {type: boolean}
+    value: {type: boolean}
     publish_rate_hz: {type: number}
     last_publish_age_ms: {type: number}
     warmup_elapsed_ms: {type: number}
@@ -24,4 +24,3 @@ invalidators:
   - worker_restart
 serialization_policy:
   include: [value, authority_source, observed_age_ms, revision]
-

@@ -21,6 +21,10 @@ def test_contract_bundle_compiles() -> None:
     assert set(compiled) == {"ARM", "TAKEOFF", "GOTO", "HOLD", "RTL", "LAND"}
     assert "offboard.stream.ok" in compiled["GOTO"].required_slots
     assert "offboard.stream.ok" not in compiled["ARM"].required_slots
+    offboard_schema = bundle.fields["offboard.stream.ok"].value_schema
+    assert offboard_schema is not None
+    assert "value" in offboard_schema["properties"]
+    assert "ok" not in offboard_schema["properties"]
 
 
 def test_non_goto_family_cannot_use_offboard_guard() -> None:
