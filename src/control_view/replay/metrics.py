@@ -96,7 +96,10 @@ def _action_summaries(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             summary["abort_reason"] = observation.get("abort_reason")
             summary["failure_reason_codes"] = list(observation.get("failure_reason_codes") or [])
     for summary in grouped.values():
-        summary["has_weak_ack"] = "weak" in summary["ack_strengths"] or summary["latest_state"] == "ACKED_WEAK"
+        summary["has_weak_ack"] = (
+            "weak" in summary["ack_strengths"]
+            or summary["latest_state"] == "ACKED_WEAK"
+        )
         summary["ack_strengths"] = sorted(summary["ack_strengths"])
     return list(grouped.values())
 
@@ -135,7 +138,10 @@ def _mission_successes(records: list[dict[str, Any]]) -> tuple[int, int]:
         if payload.get("phase") == "end" and payload.get("success") is not None:
             explicit_boundaries[mission_id] = bool(payload.get("success"))
     if explicit_boundaries:
-        return sum(1 for success in explicit_boundaries.values() if success), len(explicit_boundaries)
+        return (
+            sum(1 for success in explicit_boundaries.values() if success),
+            len(explicit_boundaries),
+        )
 
     action_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for action in _action_summaries(records):
@@ -242,6 +248,9 @@ def compute_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
             len(weak_ack_failures) / max(len(weak_ack_actions), 1),
             4,
         ),
-        "prompt_tokens_per_turn": round(sum(prompt_token_values) / max(len(decision_records), 1), 4),
+        "prompt_tokens_per_turn": round(
+            sum(prompt_token_values) / max(len(decision_records), 1),
+            4,
+        ),
         "decision_latency_ms": round(sum(latency_values) / max(len(decision_records), 1), 4),
     }

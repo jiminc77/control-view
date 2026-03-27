@@ -340,7 +340,10 @@ def main(argv: list[str] | None = None) -> int:
     failure_message: str | None = None
     try:
         run_mission(service, args.mission)
-        mission_success = bool(service.store.list_actions()) and not service.store.list_open_obligations()
+        mission_success = (
+            bool(service.store.list_actions())
+            and not service.store.list_open_obligations()
+        )
     except Exception as exc:
         failure_message = str(exc)
         raise

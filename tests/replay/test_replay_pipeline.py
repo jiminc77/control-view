@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from control_view.backend.fake_backend import FakeBackend
@@ -53,6 +54,46 @@ def test_replay_runner_and_metrics() -> None:
     assert outputs[0]["fault_injection"]["fault_name"] == "tool_registry_revision_bump"
     metrics = compute_metrics(outputs)
     assert metrics["unsafe_act_rate"] >= 0.0
+
+
+def test_replay_runner_prefers_recorded_view_result_over_request() -> None:
+    backend = FakeBackend()
+    backend.set_slot("vehicle.connected", True)
+    backend.set_slot("vehicle.mode", "MANUAL")
+    backend.set_slot("failsafe.state", {"active": False})
+    service = ControlViewService(ROOT, backend=backend)
+    recorder = ReplayRecorder()
+
+    view = service.get_control_view("ARM")
+    recorder.record_view_request("ARM", {})
+    recorder.record_view_result("ARM", view.model_dump(mode="json"))
+
+    outputs = ReplayRunner(service).replay(recorder.records)
+
+    assert [output["record_type"] for output in outputs] == ["control_view_result"]
+
+
+def test_replay_runner_refreshes_expired_request_only_lease() -> None:
+    backend = FakeBackend()
+    backend.set_slot("vehicle.connected", True)
+    backend.set_slot("vehicle.mode", "MANUAL")
+    backend.set_slot("failsafe.state", {"active": False})
+    service = ControlViewService(ROOT, backend=backend)
+    recorder = ReplayRecorder()
+
+    view = service.get_control_view("ARM")
+    recorder.record_view_result("ARM", view.model_dump(mode="json"))
+    recorder.record_execute_request(
+        "ARM",
+        view.canonical_args,
+        view.lease_token.model_dump(mode="json"),
+    )
+    time.sleep(0.4)
+
+    outputs = ReplayRunner(service).replay(recorder.records)
+
+    assert outputs[1]["record_type"] == "execute_guarded_request"
+    assert outputs[1]["status"] == ActionState.ACKED_STRONG.value
 
 
 def test_service_recorder_captures_requests_results_and_artifacts() -> None:

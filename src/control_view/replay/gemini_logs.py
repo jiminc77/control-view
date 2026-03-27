@@ -98,7 +98,10 @@ def merge_turn_metrics(
     ]
     for index, turn_metric in zip(decision_indexes, turn_metrics, strict=False):
         target = merged[index]
-        if target.get("record_type") == "control_view_result" and isinstance(target.get("payload"), dict):
+        if (
+            target.get("record_type") == "control_view_result"
+            and isinstance(target.get("payload"), dict)
+        ):
             target = target["payload"]
         target["prompt_tokens_per_turn"] = round(
             float(turn_metric.get("prompt_tokens_per_turn", 0.0)),

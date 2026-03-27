@@ -22,11 +22,71 @@ def test_fault_injector_supports_expanded_fault_set() -> None:
     assert faulted[0]["fault_injection"]["revision"] == 3
 
 
+def test_fault_injector_can_break_confirmed_goto_transition() -> None:
+    injector = FaultInjector()
+    records = [
+        {
+            "record_type": "action_transition",
+            "family": "GOTO",
+            "payload": {
+                "action_id": "a1",
+                "family": "GOTO",
+                "state": "CONFIRMED",
+                "ack_strength": "weak",
+                "confirm_evidence_json": {"confirmed_obligations": ["NAV_PENDING"]},
+            },
+        },
+        {
+            "record_type": "mission_boundary",
+            "payload": {"mission": "m1", "phase": "end", "success": True},
+        },
+    ]
+
+    faulted = injector.apply(records, "no_progress_during_goto")
+
+    assert faulted[0]["payload"]["state"] == "EXPIRED"
+    assert "no_progress_within_sec:3.0" in faulted[0]["payload"]["failure_reason_codes"]
+    assert faulted[1]["payload"]["success"] is False
+
+
+def test_fault_injector_marks_nested_control_view_slots_invalid() -> None:
+    injector = FaultInjector()
+    records = [
+        {
+            "record_type": "control_view_result",
+            "family": "GOTO",
+            "payload": {
+                "verdict": "ACT",
+                "critical_slots": {
+                    "offboard.stream.ok": {
+                        "valid_state": "VALID",
+                        "value_json": {"value": True},
+                        "reason_codes": [],
+                    }
+                },
+                "support_slots": {},
+                "blockers": [],
+            },
+        }
+    ]
+
+    faulted = injector.apply(records, "offboard_stream_loss")
+
+    slot = faulted[0]["payload"]["critical_slots"]["offboard.stream.ok"]
+    assert slot["valid_state"] == "INVALIDATED"
+    assert slot["value_json"]["value"] is False
+    assert faulted[0]["payload"]["verdict"] == "REFRESH"
+    assert faulted[0]["payload"]["blockers"][0]["kind"] == "invalidated_slot"
+
+
 def test_metrics_include_interface_mismatch_rate() -> None:
     metrics = compute_metrics(
         [
             {"record_type": "mission_boundary", "payload": {"mission": "m1", "phase": "start"}},
-            {"record_type": "control_view_result", "payload": {"verdict": "ACT", "oracle_verdict": "ACT"}},
+            {
+                "record_type": "control_view_result",
+                "payload": {"verdict": "ACT", "oracle_verdict": "ACT"},
+            },
             {
                 "record_type": "control_view_result",
                 "payload": {"verdict": "REFRESH", "oracle_verdict": "ACT"},

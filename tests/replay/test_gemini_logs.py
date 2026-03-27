@@ -30,7 +30,11 @@ def test_merge_turn_metrics_attaches_to_decision_records() -> None:
     merged = merge_turn_metrics(
         [
             {"record_type": "control_view_result", "family": "ARM", "payload": {"verdict": "ACT"}},
-            {"record_type": "action_transition", "family": "ARM", "payload": {"state": "CONFIRMED"}},
+            {
+                "record_type": "action_transition",
+                "family": "ARM",
+                "payload": {"state": "CONFIRMED"},
+            },
             {"record_type": "control_view_result", "family": "GOTO", "payload": {"verdict": "ACT"}},
         ],
         [
