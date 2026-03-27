@@ -14,4 +14,7 @@ build/
 *.pyo
 *.pyd
 .DS_Store
-
+artifacts/logs/
+artifacts/metrics/
+artifacts/replay/
+!artifacts/geofence.yaml

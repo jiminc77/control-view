@@ -18,7 +18,8 @@ family-specific typed state만 유지하는 sidecar MCP server입니다.
 - FastMCP tool surface와 `control-view-sidecar` 엔트리포인트 연결 완료
 - `MavrosBackend`는 ROS 2 Jazzy용 live adapter로 연결되며, startup wait, QoS 정합성, preview warmup, pre-dispatch abort persistence를 포함
 - replay / fault / oracle / metrics는 slot ablation, `B2/B3/B4` policy swap, stale-commit 집계까지 포함해 확장
-- `ReplayRecorder`는 `control_view.get`, `action.execute_guarded`, artifact revision, ledger snapshot을 자동 JSONL로 기록
+- `ReplayRecorder`는 decision request/result뿐 아니라 normalized event, action transition, obligation transition, mission boundary까지 JSONL로 기록
+- metrics는 mission-level success, terminal action transition, weak-ack-without-confirm을 terminal state 기준으로 계산
 - 2026-03-26 live SITL 검증 기준 `gz_x500 + MAVROS + sidecar`에서 아래 nominal missions를 end-to-end `CONFIRMED`까지 재현
   - `ARM -> TAKEOFF -> HOLD -> LAND`
   - `ARM -> TAKEOFF -> GOTO -> HOLD -> LAND`
@@ -52,6 +53,12 @@ bash -n scripts/*.sh
 
 ```bash
 ./scripts/run_sitl_smoke.sh
+uv run python scripts/run_replay_experiments.py \
+  --replay-jsonl artifacts/replay/goto_hold_land.jsonl \
+  --policy-swap B4 \
+  --fault offboard_stream_loss \
+  --output artifacts/metrics/goto_hold_land_offboard_stream_loss.json \
+  --counterexamples-jsonl artifacts/replay/goto_hold_land_offboard_stream_loss_counterexamples.jsonl
 ./scripts/run_gemini_headless_demo.sh goto_hold_land
 uv run python scripts/export_gemini_metrics.py \
   --replay-jsonl artifacts/replay/gemini_goto_hold_land_*.jsonl \
@@ -60,5 +67,6 @@ uv run python scripts/export_gemini_metrics.py \
 ```
 
 - `run_sitl_smoke.sh`는 PX4 SITL, MAVROS, sidecar dry-run, nominal mission runner를 한 번에 실행합니다.
-- `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남깁니다.
+- `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남기며 mission boundary와 terminal transition을 함께 기록합니다.
+- `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation을 적용하고 metrics/counterexample JSON을 생성합니다.
 - `run_gemini_headless_demo.sh`는 sidecar-only Gemini session을 실행하고 Gemini JSONL log를 metrics JSON으로 변환합니다.

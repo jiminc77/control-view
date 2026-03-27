@@ -72,7 +72,7 @@ def test_arm_obligation_expires_without_confirmation(fake_clock: FakeClock) -> N
     arm_view = service.get_control_view("ARM")
     exec_result = service.execute_guarded("ARM", arm_view.canonical_args, arm_view.lease_token)
 
-    fake_clock.set(3_000_000_000)
+    fake_clock.set(3_500_000_000)
     backend.set_slot("vehicle.connected", True)
     backend.set_slot("vehicle.mode", "MANUAL")
     service.get_control_view("HOLD")

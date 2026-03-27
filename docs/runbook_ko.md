@@ -155,6 +155,37 @@ uv run python -m control_view.app \
 - `artifacts/logs/mavros.log`
 - `artifacts/logs/<mission>.log`
 
+### replay 실험 실행
+
+nominal mission trace를 만든 뒤 replay/fault 실험은 아래 CLI로 재현합니다.
+
+```bash
+uv run python scripts/run_replay_experiments.py \
+  --root "$(pwd)" \
+  --replay-jsonl artifacts/replay/goto_hold_land.jsonl \
+  --policy-swap B4 \
+  --fault offboard_stream_loss \
+  --output artifacts/metrics/goto_hold_land_offboard_stream_loss.json \
+  --counterexamples-jsonl artifacts/replay/goto_hold_land_offboard_stream_loss_counterexamples.jsonl
+```
+
+slot ablation이나 baseline 비교는 플래그만 바꾸면 됩니다.
+
+```bash
+uv run python scripts/run_replay_experiments.py \
+  --root "$(pwd)" \
+  --replay-jsonl artifacts/replay/goto_hold_land.jsonl \
+  --policy-swap B3 \
+  --slot-ablation pose.local \
+  --output artifacts/metrics/goto_hold_land_b3_pose_local.json \
+  --counterexamples-jsonl artifacts/replay/goto_hold_land_b3_pose_local_counterexamples.jsonl
+```
+
+주의:
+
+- `mission_success_rate`는 mission-level 지표입니다. mission 종료 boundary와 terminal action transition이 없는 예전 replay JSONL은 재생성해서 사용해야 합니다.
+- `weak_ack_without_confirm_rate`는 weak ack action의 최종 terminal state가 `CONFIRMED`가 아니면 증가합니다.
+
 ### `ros-mcp-server` debug path
 
 - normal mode: sidecar만 LLM에 연결
@@ -190,6 +221,8 @@ uv run python -m control_view.app \
   - obligation open/close + confirm/fail/expire transition
   - FastMCP tool surface + stdio app entrypoint
   - replay / fault / oracle / metrics surface
+  - terminal action transition / obligation transition / mission boundary recorder
+  - `scripts/run_replay_experiments.py` replay experiment CLI
   - live SITL nominal mission 3종 confirmation
   - `scripts/run_sitl_smoke.sh` SITL harness
   - `scripts/run_gemini_headless_demo.sh` / `scripts/export_gemini_metrics.py`
