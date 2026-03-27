@@ -53,7 +53,7 @@ bash -n scripts/*.sh
 ## 문서
 
 - `docs/runbook_ko.md`: 로컬 개발, sidecar/observer 실행, SITL 절차
-- `docs/experiments_ko.md`: replay/live baseline 실험, observer artifact, metrics 해석
+- `docs/experiments_ko.md`: `E1~E4` 재현 절차, output layout, 결과 표 정리 방식
 - `docs/gemini_demo_prompt_ko.md`: `B3` headless Gemini prompt
 - `docs/gemini_demo_prompt_b1_ko.md`: `B1` headless Gemini prompt
 - `docs/gemini_demo_prompt_b0_ko.md`: `B0` headless Gemini prompt
@@ -65,13 +65,21 @@ bash -n scripts/*.sh
 uv run python scripts/run_replay_experiments.py \
   --replay-jsonl artifacts/replay/goto_hold_land.jsonl \
   --policy-swap B3 \
+  --scenario t3_recovery \
+  --seed 31 \
   --fault offboard_stream_loss \
   --output artifacts/metrics/goto_hold_land_offboard_stream_loss.json \
   --counterexamples-jsonl artifacts/replay/goto_hold_land_offboard_stream_loss_counterexamples.jsonl
+uv run python scripts/run_live_experiments.py \
+  --experiment E4 \
+  --scenario t3_recovery \
+  --baseline B3 \
+  --seed 31
 BASELINE=B1 ./scripts/run_gemini_headless_demo.sh goto_hold_land
 ```
 
 - `run_sitl_smoke.sh`는 PX4 SITL, MAVROS, sidecar dry-run, nominal mission runner를 한 번에 실행합니다.
 - `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남깁니다.
-- `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation, budget 조건을 적용합니다.
+- `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation, budget 조건을 적용하고 `official_trace_ready`를 함께 표시합니다.
+- `run_live_experiments.py`는 `artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/` 아래에 live 결과를 정리합니다.
 - `run_gemini_headless_demo.sh`는 `B0/B1/B3` baseline 중 하나를 선택해 Gemini session과 observer를 함께 실행하고 metrics JSON을 생성합니다.
