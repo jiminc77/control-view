@@ -6,12 +6,13 @@ MISSION="${1:-goto_hold_land}"
 BASELINE="${BASELINE:-${2:-B3}}"
 OUTPUT_FORMAT="${GEMINI_OUTPUT_FORMAT:-stream-json}"
 APPROVAL_MODE="${GEMINI_APPROVAL_MODE:-yolo}"
-STAMP="$(date +%Y%m%d_%H%M%S)"
+STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 SERVER_NAME="${SERVER_NAME:-control-view-${BASELINE,,}}"
-REPLAY_JSONL="$ROOT/artifacts/replay/gemini_${BASELINE}_${MISSION}_${STAMP}.jsonl"
-OBSERVER_JSONL="$ROOT/artifacts/replay/observer_${BASELINE}_${MISSION}_${STAMP}.jsonl"
-GEMINI_LOG="$ROOT/artifacts/logs/gemini_${BASELINE}_${MISSION}_${STAMP}.jsonl"
-METRICS_JSON="$ROOT/artifacts/metrics/gemini_${BASELINE}_${MISSION}_${STAMP}.json"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT/artifacts}"
+REPLAY_JSONL="${REPLAY_JSONL:-$OUTPUT_ROOT/replay/gemini_${BASELINE}_${MISSION}_${STAMP}.jsonl}"
+OBSERVER_JSONL="${OBSERVER_JSONL:-$OUTPUT_ROOT/replay/observer_${BASELINE}_${MISSION}_${STAMP}.jsonl}"
+GEMINI_LOG="${GEMINI_LOG:-$OUTPUT_ROOT/logs/gemini_${BASELINE}_${MISSION}_${STAMP}.jsonl}"
+METRICS_JSON="${METRICS_JSON:-$OUTPUT_ROOT/metrics/gemini_${BASELINE}_${MISSION}_${STAMP}.json}"
 
 case "$BASELINE" in
   B0) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_demo_prompt_b0_ko.md" ;;
@@ -24,7 +25,7 @@ case "$BASELINE" in
 esac
 PROMPT_FILE="${PROMPT_FILE:-$DEFAULT_PROMPT_FILE}"
 
-mkdir -p "$ROOT/artifacts/replay" "$ROOT/artifacts/logs" "$ROOT/artifacts/metrics"
+mkdir -p "$(dirname "$REPLAY_JSONL")" "$(dirname "$OBSERVER_JSONL")" "$(dirname "$GEMINI_LOG")" "$(dirname "$METRICS_JSON")"
 
 MISSION_PROMPT="$(cat "$PROMPT_FILE")
 

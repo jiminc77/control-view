@@ -1,0 +1,32 @@
+name: t2_spec_drift
+mission: goto_hold_land
+prompt_appendix: |
+  Spec-drift profile:
+  실험 중간에 mission spec과 geofence revision이 바뀔 수 있다.
+  다음 action을 결정하기 전에 revision 변화와 blocker를 반드시 확인해.
+steps:
+  - at_sec: 10
+    action: artifact_update
+    artifact: mission_spec
+    revision: 1
+    note: mid-mission mission spec revision bump
+    payload:
+      revision: 1
+      completion:
+        hover_before_land_sec: 2
+        note: tightened completion criteria
+  - at_sec: 16
+    action: artifact_update
+    artifact: geofence
+    revision: 2
+    note: shrink geofence after goto start
+    payload:
+      revision: 2
+      frame_id: map
+      polygons:
+        - id: shrink
+          points:
+            - {x: -1.0, y: -1.0}
+            - {x: 1.0, y: -1.0}
+            - {x: 1.0, y: 1.0}
+            - {x: -1.0, y: 1.0}

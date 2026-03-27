@@ -1,0 +1,7 @@
+name: t1_low
+mission: goto_hold_land
+prompt_appendix: |
+  Context-churn low profile:
+  1. TAKEOFF 직후 현재 상태를 한 문장으로 요약해.
+  2. GOTO 직전에 raw inspection이 필요한지 한 문장으로 판단하고 계속 진행해.
+steps: []

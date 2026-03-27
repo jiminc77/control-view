@@ -1,0 +1,8 @@
+name: t1_high
+mission: goto_hold_land
+prompt_appendix: |
+  Context-churn high profile:
+  1. 각 family 전환 직전에 현재 mode, pending obligation, next action 이유를 짧게 설명해.
+  2. GOTO 전 raw inspection 필요 여부와 geofence/tool revision 상태를 짧게 확인해.
+  3. HOLD 전까지 누적된 debug 질문을 정리한 뒤 mission을 계속 진행해.
+steps: []
