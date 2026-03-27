@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from control_view.baselines import BASELINE_NAMES, normalize_baseline_name
 from control_view.backend.fake_backend import FakeBackend
 from control_view.replay.fault_injector import FaultInjector
 from control_view.replay.metrics import compute_metrics
@@ -49,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--replay-jsonl", type=Path, required=True)
-    parser.add_argument("--policy-swap", choices=["B2", "B3", "B4"], default="B4")
+    parser.add_argument("--policy-swap", choices=list(BASELINE_NAMES), default="B3")
     parser.add_argument("--fault", default=None)
     parser.add_argument("--fault-param", action="append", default=[])
     parser.add_argument("--slot-ablation", action="append", default=[])
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         fault_name=args.fault,
         fault_params=fault_params,
         slot_ablation=args.slot_ablation,
-        policy_swap=args.policy_swap,
+        policy_swap=normalize_baseline_name(args.policy_swap),
         oracle=RuleBasedOracle(),
     )
     metrics = compute_metrics(outputs)

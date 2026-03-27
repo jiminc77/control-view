@@ -45,11 +45,11 @@ def test_replay_runner_and_metrics() -> None:
         fault_name="tool_registry_revision_bump",
         oracle=RuleBasedOracle(),
         slot_ablation=["vehicle.connected"],
-        policy_swap="B3",
+        policy_swap="B2",
     )
 
     assert outputs[0]["verdict"] == Verdict.ACT.value
-    assert outputs[0]["policy_swap"] == "B3"
+    assert outputs[0]["policy_swap"] == "B2"
     assert outputs[0]["ablated_slots"] == ["vehicle.connected"]
     assert outputs[0]["fault_injection"]["fault_name"] == "tool_registry_revision_bump"
     metrics = compute_metrics(outputs)
@@ -135,15 +135,15 @@ def test_policy_swap_removes_stale_commit_abort() -> None:
     )
 
     service = ControlViewService(ROOT, backend=FakeBackend())
-    b4_output = ReplayRunner(service).replay(recorder.records, policy_swap="B4")
     b3_output = ReplayRunner(service).replay(recorder.records, policy_swap="B3")
+    b2_output = ReplayRunner(service).replay(recorder.records, policy_swap="B2")
 
-    assert b4_output[0]["status"] == ActionState.ABORTED.value
-    assert b3_output[0]["status"] == ActionState.ACKED_WEAK.value
-    assert b3_output[0]["abort_reason"] is None
+    assert b3_output[0]["status"] == ActionState.ABORTED.value
+    assert b2_output[0]["status"] == ActionState.ACKED_WEAK.value
+    assert b2_output[0]["abort_reason"] is None
 
 
-def test_policy_swap_distinguishes_ttl_only_from_no_governor() -> None:
+def test_policy_swap_distinguishes_full_from_ttl_only_and_no_governor() -> None:
     recorder = ReplayRecorder()
     recorder.record_view_result(
         "GOTO",
@@ -168,8 +168,10 @@ def test_policy_swap_distinguishes_ttl_only_from_no_governor() -> None:
     )
 
     service = ControlViewService(ROOT, backend=FakeBackend())
+    b1_output = ReplayRunner(service).replay(recorder.records, policy_swap="B1")
     b2_output = ReplayRunner(service).replay(recorder.records, policy_swap="B2")
     b3_output = ReplayRunner(service).replay(recorder.records, policy_swap="B3")
 
-    assert b2_output[0]["verdict"] == Verdict.ACT.value
-    assert b3_output[0]["verdict"] == Verdict.REFRESH.value
+    assert b1_output[0]["verdict"] == Verdict.ACT.value
+    assert b2_output[0]["verdict"] == Verdict.REFRESH.value
+    assert b3_output[0]["verdict"] == Verdict.SAFE_HOLD.value
