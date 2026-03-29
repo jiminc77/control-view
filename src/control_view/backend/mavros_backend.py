@@ -756,7 +756,7 @@ class MavrosBackend(BackendAdapter):
             request.yaw = float(self._current_yaw or 0.0)
             request.latitude = float(geo_reference["latitude"])
             request.longitude = float(geo_reference["longitude"])
-            request.altitude = float(geo_reference["altitude"]) + float(target_altitude)
+            request.altitude = float(target_altitude)
             response = self._call_service("takeoff", request, self._timeout("takeoff_sec", 5.0))
         except Exception as exc:
             return BackendActionResult(

@@ -13,6 +13,8 @@ REPLAY_JSONL="${REPLAY_JSONL:-$OUTPUT_ROOT/replay/gemini_${BASELINE}_${MISSION}_
 OBSERVER_JSONL="${OBSERVER_JSONL:-$OUTPUT_ROOT/replay/observer_${BASELINE}_${MISSION}_${STAMP}.jsonl}"
 GEMINI_LOG="${GEMINI_LOG:-$OUTPUT_ROOT/logs/gemini_${BASELINE}_${MISSION}_${STAMP}.jsonl}"
 METRICS_JSON="${METRICS_JSON:-$OUTPUT_ROOT/metrics/gemini_${BASELINE}_${MISSION}_${STAMP}.json}"
+SQLITE_PATH="${SQLITE_PATH:-$OUTPUT_ROOT/control_view.sqlite3}"
+POLICY_FILE="${POLICY_FILE:-$ROOT/.gemini/policies/only_mcp.toml}"
 
 case "$BASELINE" in
   B0) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_demo_prompt_b0_ko.md" ;;
@@ -33,6 +35,16 @@ Mission name: ${MISSION}
 Baseline: ${BASELINE}
 "
 
+OBSERVER_ARGS=(
+  --mission "$MISSION"
+  --output-jsonl "$OBSERVER_JSONL"
+  --stop-when-complete
+)
+
+if [[ -n "${FAULT_EVENTS_JSONL:-}" ]]; then
+  OBSERVER_ARGS+=(--fault-events-jsonl "$FAULT_EVENTS_JSONL")
+fi
+
 gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
 cleanup() {
   gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
@@ -51,26 +63,23 @@ stop_observer() {
   fi
 }
 
-uv run control-view-observer \
-  --mission "$MISSION" \
-  --output-jsonl "$OBSERVER_JSONL" \
-  --stop-when-complete &
+uv run control-view-observer "${OBSERVER_ARGS[@]}" &
 OBSERVER_PID=$!
 sleep 1
 
 case "$BASELINE" in
   B0)
-    if [[ -z "${ROS_MCP_BASELINE_COMMAND:-}" ]]; then
-      echo "ROS_MCP_BASELINE_COMMAND is required for B0" >&2
-      exit 1
+    if [[ -n "${ROS_MCP_BASELINE_COMMAND:-}" ]]; then
+      SERVER_COMMAND="${ROS_MCP_BASELINE_COMMAND}"
+    else
+      SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-raw-mcp --root \"$ROOT\" --backend mavros --artifact-dir \"${CONTROL_VIEW_ARTIFACTS_DIR:-$ROOT/artifacts}\" --record-jsonl \"$REPLAY_JSONL\""
     fi
-    SERVER_COMMAND="${ROS_MCP_BASELINE_COMMAND}"
     ;;
   B1)
-    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend mavros --tool-surface thin --baseline-policy B1 --record-jsonl \"$REPLAY_JSONL\""
+    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend mavros --sqlite-path \"$SQLITE_PATH\" --tool-surface thin --baseline-policy B1 --record-jsonl \"$REPLAY_JSONL\""
     ;;
   B3)
-    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend mavros --tool-surface full --baseline-policy B3 --record-jsonl \"$REPLAY_JSONL\""
+    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend mavros --sqlite-path \"$SQLITE_PATH\" --tool-surface full --baseline-policy B3 --record-jsonl \"$REPLAY_JSONL\""
     ;;
 esac
 
@@ -80,6 +89,7 @@ gemini mcp add "$SERVER_NAME" bash -lc \
 gemini \
   --include-directories "$ROOT" \
   --allowed-mcp-server-names "$SERVER_NAME" \
+  --policy "$POLICY_FILE" \
   --approval-mode "$APPROVAL_MODE" \
   --output-format "$OUTPUT_FORMAT" \
   --prompt "$MISSION_PROMPT" | tee "$GEMINI_LOG"

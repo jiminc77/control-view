@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import signal
 import threading
@@ -21,19 +22,28 @@ class ObserverNode:
         namespace: str,
         sample_period_ms: int,
         recorder: ReplayRecorder,
+        fault_events_jsonl: Path | None,
         stop_when_complete: bool,
     ) -> None:
         self._mission = mission
         self._namespace = namespace
         self._sample_period_ms = sample_period_ms
         self._recorder = recorder
+        self._fault_events_jsonl = fault_events_jsonl
         self._tracker = MissionObserverTracker(mission)
         self._stop_when_complete = stop_when_complete
         self._stop_event = threading.Event()
+        self._started_mono_ns: int | None = None
         self._rclpy: Any | None = None
         self._node: Any | None = None
         self._executor: Any | None = None
         self._spin_thread: threading.Thread | None = None
+        self._fault_event_index = 0
+        self._external_fault_active = False
+        self._external_fault_count = 0
+        self._external_recovered_fault_count = 0
+        self._external_first_fault_mono_ns: int | None = None
+        self._external_first_recovery_mono_ns: int | None = None
         self._latest: dict[str, Any] = {
             "connected": False,
             "armed": False,
@@ -42,6 +52,18 @@ class ObserverNode:
             "speed_mps": 0.0,
             "on_ground": True,
         }
+
+    def _external_fault_records(self) -> list[dict[str, Any]]:
+        if self._fault_events_jsonl is None or not self._fault_events_jsonl.exists():
+            return []
+        records: list[dict[str, Any]] = []
+        for line in self._fault_events_jsonl.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            if str(payload.get("status")) == "ok":
+                records.append(payload)
+        return records
 
     def run(self, *, duration_sec: float | None = None) -> None:
         self._ensure_runtime()
@@ -66,6 +88,42 @@ class ObserverNode:
 
     def shutdown(self) -> None:
         summary = self._tracker.summary()
+        external_fault_records = self._external_fault_records()
+        external_fault_count = max(self._external_fault_count, len(external_fault_records))
+        external_recovered_fault_count = self._external_recovered_fault_count
+        if (
+            bool(summary.get("mission_success"))
+            and external_recovered_fault_count < external_fault_count
+        ):
+            external_recovered_fault_count = external_fault_count
+        summary["fault_count"] = int(summary.get("fault_count", 0)) + external_fault_count
+        summary["recovered_fault_count"] = int(
+            summary.get("recovered_fault_count", 0)
+        ) + external_recovered_fault_count
+        first_fault_candidates = [
+            value
+            for value in [
+                summary.get("first_fault_mono_ns"),
+                self._external_first_fault_mono_ns,
+                *[
+                    int(record.get("applied_mono_ns"))
+                    for record in external_fault_records
+                    if record.get("applied_mono_ns") is not None
+                ],
+            ]
+            if value is not None
+        ]
+        summary["first_fault_mono_ns"] = (
+            min(first_fault_candidates) if first_fault_candidates else None
+        )
+        if (
+            float(summary.get("time_to_first_recovery_sec") or 0.0) == 0.0
+            and self._external_first_recovery_mono_ns is not None
+        ):
+            summary["time_to_first_recovery_sec"] = round(
+                self._elapsed_sec(self._external_first_recovery_mono_ns),
+                3,
+            )
         self._recorder.record(
             "observer_summary",
             payload=summary,
@@ -179,7 +237,10 @@ class ObserverNode:
             speed_mps=float(self._latest["speed_mps"]),
             on_ground=bool(self._latest["on_ground"]),
         )
+        if self._started_mono_ns is None:
+            self._started_mono_ns = sample.mono_ns
         events = self._tracker.process(sample)
+        events.extend(self._process_external_fault_events(sample))
         for event in events:
             self._recorder.record(
                 "observer_event",
@@ -191,11 +252,79 @@ class ObserverNode:
         if self._stop_when_complete and self._tracker.is_complete():
             self.request_stop()
 
+    def _process_external_fault_events(self, sample: ObserverSample) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        if self._fault_events_jsonl is not None and self._fault_events_jsonl.exists():
+            lines = self._fault_events_jsonl.read_text(encoding="utf-8").splitlines()
+            new_lines = lines[self._fault_event_index :]
+            self._fault_event_index = len(lines)
+            for line in new_lines:
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                if str(payload.get("status")) != "ok":
+                    continue
+                if self._tracker.summary()["touchdown_seen"]:
+                    continue
+                self._external_fault_active = True
+                self._external_fault_count += 1
+                if self._external_first_fault_mono_ns is None:
+                    self._external_first_fault_mono_ns = sample.mono_ns
+                events.append(
+                    self._event(
+                        sample,
+                        "fault_detected",
+                        fault_kind="external_injection",
+                        fault_note=str(payload.get("note") or ""),
+                    )
+                )
+        if self._external_fault_active and self._is_recovered(sample):
+            self._external_fault_active = False
+            self._external_recovered_fault_count += 1
+            if self._external_first_recovery_mono_ns is None:
+                self._external_first_recovery_mono_ns = sample.mono_ns
+            events.append(
+                self._event(
+                    sample,
+                    "fault_recovered",
+                    recovered_faults=["external_injection"],
+                )
+            )
+        return events
+
+    def _is_recovered(self, sample: ObserverSample) -> bool:
+        stable = sample.speed_mps <= self._tracker._STABLE_SPEED_MPS
+        return (stable and sample.mode in {"AUTO.LOITER", "AUTO.RTL"}) or bool(
+            self._tracker.summary()["touchdown_seen"]
+        )
+
+    def _elapsed_sec(self, target_mono_ns: int | None) -> float:
+        if self._started_mono_ns is None or target_mono_ns is None:
+            return 0.0
+        return max(target_mono_ns - self._started_mono_ns, 0) / 1_000_000_000
+
+    def _event(self, sample: ObserverSample, event_kind: str, **payload: Any) -> dict[str, Any]:
+        return {
+            "event_kind": event_kind,
+            "mission": self._mission,
+            "mode": sample.mode,
+            "connected": sample.connected,
+            "armed": sample.armed,
+            "speed_mps": round(sample.speed_mps, 3),
+            "position": {
+                "x": round(float(sample.position.get("x", 0.0)), 3),
+                "y": round(float(sample.position.get("y", 0.0)), 3),
+                "z": round(float(sample.position.get("z", 0.0)), 3),
+            },
+            **payload,
+        }
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="control-view-observer")
     parser.add_argument("--mission", required=True)
     parser.add_argument("--output-jsonl", type=Path, required=True)
+    parser.add_argument("--fault-events-jsonl", type=Path, default=None)
     parser.add_argument("--namespace", default="/mavros")
     parser.add_argument("--sample-period-ms", type=int, default=200)
     parser.add_argument("--duration-sec", type=float, default=None)
@@ -205,12 +334,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    recorder = ReplayRecorder(default_metadata={"observer": True, "mission_id": args.mission})
+    recorder = ReplayRecorder(
+        default_metadata={"observer": True, "mission_id": args.mission},
+        stream_path=args.output_jsonl,
+    )
     node = ObserverNode(
         mission=args.mission,
         namespace=args.namespace,
         sample_period_ms=args.sample_period_ms,
         recorder=recorder,
+        fault_events_jsonl=args.fault_events_jsonl,
         stop_when_complete=args.stop_when_complete,
     )
 

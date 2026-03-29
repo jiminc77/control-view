@@ -57,7 +57,7 @@ obligation_templates:
   - id: NAV_PENDING
     open_on: ACKED_WEAK
     close_when:
-      - expr: vehicle.mode == "OFFBOARD" and nav.progress.phase == "ARRIVED"
+      - expr: nav.progress.phase == "ARRIVED"
         for_sec: 0.5
     fail_when:
       - OFFBOARD_lost_before_arrival

@@ -22,6 +22,7 @@ dev = [
 
 [project.scripts]
 control-view-sidecar = "control_view.app:main"
+control-view-raw-mcp = "control_view.raw_app:main"
 control-view-observer = "control_view.observer.app:main"
 
 [tool.setuptools]

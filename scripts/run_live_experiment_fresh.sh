@@ -4,20 +4,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PX4_ROOT="${PX4_ROOT:-$ROOT/../PX4-Autopilot}"
 PX4_ROOT="$(cd "$PX4_ROOT" && pwd)"
-BACKEND_CONFIG="${BACKEND_CONFIG:-$ROOT/configs/backend_mavros.yaml}"
-LOG_DIR="${LOG_DIR:-$ROOT/artifacts/logs}"
-MISSIONS=("$@")
+LOG_ROOT="${LOG_ROOT:-$ROOT/artifacts/logs/live_runs}"
+EXPERIMENT="${1:?experiment is required}"
+SCENARIO="${2:?scenario is required}"
+BASELINE="${3:?baseline is required}"
+SEED="${4:-0}"
+STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
+RUN_LOG_DIR="$LOG_ROOT/$STAMP/${EXPERIMENT}_${SCENARIO}_${BASELINE}"
 
-if [[ ${#MISSIONS[@]} -eq 0 ]]; then
-  MISSIONS=("takeoff_hold_land" "goto_hold_land" "goto_rtl")
-fi
-
-mkdir -p "$LOG_DIR" "$ROOT/artifacts/replay" "$ROOT/artifacts/metrics"
-
-if [[ ! -d "$PX4_ROOT" ]]; then
-  echo "PX4 root not found: $PX4_ROOT" >&2
-  exit 1
-fi
+mkdir -p "$RUN_LOG_DIR"
 
 set +u
 source /opt/ros/jazzy/setup.bash
@@ -53,7 +48,7 @@ wait_for_service() {
 }
 
 wait_for_ready_state() {
-  local attempts="${1:-20}"
+  local attempts="${1:-30}"
   local state_output
   for _ in $(seq 1 "$attempts"); do
     if state_output="$(timeout 5s ros2 topic echo /mavros/state --once 2>/dev/null)" \
@@ -66,17 +61,29 @@ wait_for_ready_state() {
   return 1
 }
 
+wait_for_topic_once() {
+  local topic_name="$1"
+  local attempts="${2:-30}"
+  for _ in $(seq 1 "$attempts"); do
+    if timeout 5s ros2 topic echo "$topic_name" --once >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 echo "Cleaning up stale PX4 SITL, MAVROS, and Gazebo processes"
 cleanup
 sleep 2
 
 echo "Starting PX4 SITL from $PX4_ROOT"
-HEADLESS=1 make -C "$PX4_ROOT" px4_sitl gz_x500 >"$LOG_DIR/px4_sitl.log" 2>&1 &
+HEADLESS=1 make -C "$PX4_ROOT" px4_sitl gz_x500 >"$RUN_LOG_DIR/px4_sitl.log" 2>&1 &
 PX4_PID=$!
 sleep 10
 
 echo "Starting MAVROS bridge"
-ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14557 >"$LOG_DIR/mavros.log" 2>&1 &
+ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14557 >"$RUN_LOG_DIR/mavros.log" 2>&1 &
 MAVROS_PID=$!
 
 if ! wait_for_service /mavros/set_mode 60; then
@@ -89,16 +96,26 @@ if ! wait_for_ready_state 30; then
   exit 1
 fi
 
-uv run python -m control_view.app \
-  --root "$ROOT" \
-  --backend mavros \
-  --backend-config "$BACKEND_CONFIG" \
-  --dry-run | tee "$LOG_DIR/sidecar_dry_run.log"
+if ! wait_for_topic_once /mavros/local_position/odom 30; then
+  echo "Timed out waiting for /mavros/local_position/odom" >&2
+  exit 1
+fi
 
-for mission in "${MISSIONS[@]}"; do
-  echo "Running mission: $mission"
-  uv run python "$ROOT/scripts/run_mission.py" \
-    --root "$ROOT" \
-    --backend-config "$BACKEND_CONFIG" \
-    --mission "$mission" | tee "$LOG_DIR/${mission}.log"
-done
+if ! wait_for_topic_once /mavros/home_position/home 30; then
+  echo "Timed out waiting for /mavros/home_position/home" >&2
+  exit 1
+fi
+
+if ! wait_for_topic_once /mavros/global_position/global 30; then
+  echo "Timed out waiting for /mavros/global_position/global" >&2
+  exit 1
+fi
+
+echo "Running fresh live experiment: $EXPERIMENT / $SCENARIO / $BASELINE / seed=$SEED"
+uv run python "$ROOT/scripts/run_live_experiments.py" \
+  --root "$ROOT" \
+  --experiment "$EXPERIMENT" \
+  --scenario "$SCENARIO" \
+  --baseline "$BASELINE" \
+  --seed "$SEED" \
+  --output-root "$ROOT/artifacts/experiments"

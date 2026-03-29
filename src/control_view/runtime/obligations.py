@@ -80,20 +80,6 @@ class ObligationEngine:
         now_ns = monotonic_ns()
         updated_open: list[ObligationRecord] = []
         for record in open_records:
-            failure = self._first_failure_condition(
-                record,
-                now_ns,
-                evidence_map,
-                backend_context or {},
-            )
-            if failure is not None:
-                record.status = self._failure_status(failure)
-                record.updated_mono_ns = now_ns
-                self._store.upsert_obligation(record)
-                self._record_obligation_transition(record)
-                self._transition_related_action(record, failure_condition=failure)
-                continue
-
             if all(
                 self._condition_met(
                     condition,
@@ -109,6 +95,20 @@ class ObligationEngine:
                 self._store.upsert_obligation(record)
                 self._record_obligation_transition(record)
                 self._transition_related_action(record, confirmed=True)
+                continue
+
+            failure = self._first_failure_condition(
+                record,
+                now_ns,
+                evidence_map,
+                backend_context or {},
+            )
+            if failure is not None:
+                record.status = self._failure_status(failure)
+                record.updated_mono_ns = now_ns
+                self._store.upsert_obligation(record)
+                self._record_obligation_transition(record)
+                self._transition_related_action(record, failure_condition=failure)
                 continue
 
             record.updated_mono_ns = now_ns

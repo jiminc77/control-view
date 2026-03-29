@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_live_fault_injector_module():
+    spec = importlib.util.spec_from_file_location(
+        "control_view_live_fault_injector",
+        ROOT / "scripts" / "live_fault_injector.py",
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_live_fault_injector_dry_run() -> None:
@@ -62,3 +77,32 @@ def test_live_experiment_runner_dry_run(tmp_path: Path) -> None:
     assert payload["scenario"] == "t1_medium"
     assert payload["baseline"] == "B3"
     assert payload["mission"] == "goto_hold_land"
+
+
+def test_t3_recovery_uses_observer_event_triggers() -> None:
+    payload = yaml.safe_load((ROOT / "configs" / "experiments" / "t3_recovery.yaml").read_text())
+
+    step_contract = [
+        (
+            step["action"],
+            step.get("unit"),
+            step.get("failure_type"),
+            step.get("after_observer_event"),
+            int(step.get("occurrence", 1)),
+            float(step.get("delay_sec", 0.0)),
+            step.get("fallback", {}).get("custom_mode"),
+        )
+        for step in payload["steps"]
+    ]
+
+    assert step_contract == [
+        ("inject_failure", "mavlink_signal", "off", "excursion_reached", 1, 0.0, "AUTO.LOITER"),
+        ("inject_failure", "mavlink_signal", "off", "fault_recovered", 1, 8.0, "AUTO.LOITER"),
+    ]
+
+
+def test_live_fault_injector_normalizes_yaml_boolean_off_token() -> None:
+    module = _load_live_fault_injector_module()
+
+    assert module._normalize_fault_token(False) == "off"
+    assert module._normalize_fault_token("off") == "off"

@@ -5,7 +5,7 @@ prompt_appendix: |
   실험 중간에 mission spec과 geofence revision이 바뀔 수 있다.
   다음 action을 결정하기 전에 revision 변화와 blocker를 반드시 확인해.
 steps:
-  - at_sec: 10
+  - at_sec: 30
     action: artifact_update
     artifact: mission_spec
     revision: 1
@@ -15,7 +15,7 @@ steps:
       completion:
         hover_before_land_sec: 2
         note: tightened completion criteria
-  - at_sec: 16
+  - at_sec: 45
     action: artifact_update
     artifact: geofence
     revision: 2

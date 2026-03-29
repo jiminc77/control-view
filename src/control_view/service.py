@@ -240,6 +240,7 @@ class ControlViewService:
         last_n: int = 20,
         since_mono_ns: int | None = None,
     ) -> dict[str, Any]:
+        self._refresh_open_obligations()
         recent_events = (
             self.store.tail_events_since(since_mono_ns)
             if since_mono_ns is not None
@@ -258,6 +259,19 @@ class ControlViewService:
             ],
             "artifact_revisions": self.artifacts.list_all(),
         }
+
+    def _refresh_open_obligations(self) -> None:
+        open_records = self.store.list_open_obligations()
+        for record in open_records:
+            canonical_args = record.notes.get("canonical_args", {}) if record.notes else {}
+            if not isinstance(canonical_args, dict):
+                canonical_args = {}
+            self._evaluate_family(
+                record.family,
+                canonical_args,
+                refresh=True,
+                canonical_input=True,
+            )
 
     def _evaluate_family(
         self,
@@ -286,8 +300,6 @@ class ControlViewService:
                 canonical_args = proposed_args
             else:
                 canonical_args, arg_blockers = self._canonicalize_goto(proposed_args)
-            if not arg_blockers:
-                self.backend.prepare_control_view(family, canonical_args)
         non_contextual_slots = [
             slot_id
             for slot_id in compiled.required_slots
@@ -313,7 +325,28 @@ class ControlViewService:
             )
         )
         if family == "GOTO" and canonical_args and not arg_blockers:
+            canonical_args, fill_blockers = self._fill_goto_args(canonical_args, evidence_map)
+            arg_blockers.extend(fill_blockers)
+        if family == "GOTO" and canonical_args and not arg_blockers:
             canonical_args = self._enrich_goto_args(canonical_args, evidence_map)
+            self.backend.prepare_control_view(family, canonical_args)
+            if refresh:
+                evidence_map = self.materializer.refresh_slots(non_contextual_slots)
+                evidence_map.update(
+                    self._context_dependencies(
+                        compiled.required_slots,
+                        evidence_map,
+                        refresh=refresh,
+                    )
+                )
+                evidence_map.update(
+                    self._refresh_derived_required_slots(
+                        compiled.required_slots,
+                        evidence_map,
+                        refresh=refresh,
+                    )
+                )
+                canonical_args = self._enrich_goto_args(canonical_args, evidence_map)
         if family != "GOTO":
             if canonical_input:
                 canonical_args = proposed_args
@@ -632,15 +665,14 @@ class ControlViewService:
         )
         current_mode = str(mode.value_json.get("value", mode.value_json))
 
-        if current_mode in {"AUTO.LOITER", "AUTO.TAKEOFF"} and speed_mps <= 0.3:
-            phase = "HOLDING"
-        elif (
+        if (
             distance_m is not None
-            and current_mode == "OFFBOARD"
             and distance_m <= 0.5
             and speed_mps <= 0.3
         ):
             phase = "ARRIVED"
+        elif current_mode in {"AUTO.LOITER", "AUTO.TAKEOFF"} and speed_mps <= 0.3:
+            phase = "HOLDING"
         elif family == "GOTO" or target_pose:
             phase = "IN_PROGRESS"
         else:
@@ -833,6 +865,19 @@ class ControlViewService:
             )
             return {}, blockers
 
+        if "x" not in target_pose["position"] or "y" not in target_pose["position"]:
+            blockers.append(
+                make_blocker(
+                    slot_id="target_pose.position",
+                    kind="arg_missing",
+                    severity="high",
+                    message="goto requires target_pose.position.x and target_pose.position.y",
+                    refreshable=False,
+                    refresh_hint="provide target_pose.position.x and target_pose.position.y",
+                )
+            )
+            return {}, blockers
+
         position = {
             key: round(float(value), 3)
             for key, value in target_pose["position"].items()
@@ -847,6 +892,41 @@ class ControlViewService:
         if "yaw" in target_pose:
             canonical["target_pose"]["yaw"] = round(float(target_pose["yaw"]), 3)
         return canonical, []
+
+    def _fill_goto_args(
+        self,
+        canonical_args: dict[str, Any],
+        evidence_map: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[Blocker]]:
+        position = dict(deep_get(canonical_args, "target_pose.position", {}) or {})
+        if "z" in position:
+            return canonical_args, []
+        current_z = deep_get(evidence_map.get("pose.local"), "value_json.position.z")
+        if current_z is None:
+            return (
+                canonical_args,
+                [
+                    make_blocker(
+                        slot_id="pose.local",
+                        kind="arg_fill_missing_z",
+                        severity="high",
+                        message="pose.local is required to fill goto target altitude",
+                        refreshable=True,
+                        refresh_hint="refresh pose.local",
+                    )
+                ],
+            )
+        position["z"] = round(float(current_z), 3)
+        return (
+            {
+                **canonical_args,
+                "target_pose": {
+                    **deep_get(canonical_args, "target_pose", {}),
+                    "position": position,
+                },
+            },
+            [],
+        )
 
     def _enrich_goto_args(
         self,

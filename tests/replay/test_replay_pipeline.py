@@ -56,6 +56,20 @@ def test_replay_runner_and_metrics() -> None:
     assert metrics["unsafe_act_rate"] >= 0.0
 
 
+def test_replay_recorder_streams_jsonl_incrementally(tmp_path: Path) -> None:
+    output = tmp_path / "observer.jsonl"
+    recorder = ReplayRecorder(stream_path=output)
+
+    recorder.record("observer_event", payload={"event_kind": "arrival"})
+    recorder.record("observer_summary", payload={"mission_success": True})
+
+    lines = output.read_text(encoding="utf-8").splitlines()
+
+    assert len(lines) == 2
+    assert "observer_event" in lines[0]
+    assert "observer_summary" in lines[1]
+
+
 def test_replay_runner_prefers_recorded_view_result_over_request() -> None:
     backend = FakeBackend()
     backend.set_slot("vehicle.connected", True)

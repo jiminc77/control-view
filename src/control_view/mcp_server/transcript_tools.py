@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
 from fastmcp import FastMCP
@@ -14,12 +16,121 @@ from control_view.mcp_server.transcript_schemas import (
 )
 from control_view.service import ControlViewService
 
+_STATUS_POLL_INTERVAL_SEC = 0.5
+_EMPTY_STATUS_SETTLE_SEC = 1.0
+_PENDING_STATUS_WAIT_SEC = {
+    "ARM": 3.5,
+    "TAKEOFF": 12.0,
+    "GOTO": 6.0,
+    "HOLD": 5.0,
+    "RTL": 5.0,
+    "LAND": 15.0,
+}
+
 
 def _summary(text: str, payload: dict[str, Any]) -> ToolResult:
     return ToolResult(
         content=[TextContent(type="text", text=text)],
         structured_content=payload,
     )
+
+
+def _json_text(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True)
+
+
+def transcript_decision_summary_text(payload: dict[str, Any]) -> str:
+    return _json_text(
+        {
+            "family": payload.get("family"),
+            "verdict": payload.get("verdict"),
+            "canonical_args": payload.get("canonical_args", {}),
+            "blockers": payload.get("blockers", []),
+            "recommended_next": payload.get("recommended_next"),
+        }
+    )
+
+
+def transcript_execute_summary_text(payload: dict[str, Any]) -> str:
+    return _json_text(
+        {
+            "family": payload.get("family"),
+            "verdict": payload.get("verdict"),
+            "status": payload.get("status"),
+            "canonical_args": payload.get("canonical_args", {}),
+            "blockers": payload.get("blockers", []),
+            "abort_reason": payload.get("abort_reason"),
+            "next_check": payload.get("next_check"),
+            "action_id": payload.get("action_id"),
+        }
+    )
+
+
+def transcript_status_summary_text(payload: dict[str, Any]) -> str:
+    return _json_text(
+        {
+            "recent_actions": payload.get("recent_actions", [])[-5:],
+            "pending_families": payload.get("pending_families", []),
+            "open_obligation_count": payload.get("open_obligation_count", 0),
+        }
+    )
+
+
+def _transcript_status_snapshot(
+    service: ControlViewService,
+    *,
+    last_n: int,
+) -> dict[str, Any]:
+    tail = service.ledger_tail(last_n=last_n)
+    recent_actions = [
+        {
+            "action_id": item.get("action_id"),
+            "family": item.get("family"),
+            "state": item.get("state"),
+            "failure_reason_codes": item.get("failure_reason_codes", []),
+        }
+        for item in tail.get("recent_actions", [])
+        if isinstance(item, dict)
+    ]
+    pending_families = sorted(
+        {
+            str(item.get("family"))
+            for item in tail.get("open_obligations", [])
+            if isinstance(item, dict) and item.get("family")
+        }
+    )
+    return TranscriptStatusResult(
+        recent_actions=recent_actions,
+        pending_families=pending_families,
+        open_obligation_count=len(tail.get("open_obligations", [])),
+    ).model_dump(mode="json")
+
+
+def _transcript_status_signature(payload: dict[str, Any]) -> tuple[Any, ...]:
+    recent_actions = tuple(
+        (
+            item.get("action_id"),
+            item.get("family"),
+            item.get("state"),
+            tuple(item.get("failure_reason_codes", [])),
+        )
+        for item in payload.get("recent_actions", [])
+        if isinstance(item, dict)
+    )
+    return (
+        int(payload.get("open_obligation_count", 0)),
+        tuple(payload.get("pending_families", [])),
+        recent_actions,
+    )
+
+
+def _transcript_status_wait_budget(payload: dict[str, Any]) -> float:
+    pending = payload.get("pending_families", [])
+    if pending:
+        return max(_PENDING_STATUS_WAIT_SEC.get(str(family), 3.0) for family in pending)
+    if not payload.get("recent_actions", []):
+        return _EMPTY_STATUS_SETTLE_SEC
+    return 0.0
 
 
 def transcript_decision_payload(
@@ -61,6 +172,7 @@ def transcript_execute_payload(
     proposed_args: dict[str, Any] | None = None,
     baseline_policy: str,
 ) -> dict[str, Any]:
+    transcript_status_payload(service, last_n=10)
     view = service.get_control_view(family, proposed_args or {})
     projected = baseline_view_payload(view.model_dump(mode="json"), baseline_policy)
     blockers = [
@@ -101,29 +213,24 @@ def transcript_status_payload(
     *,
     last_n: int = 10,
 ) -> dict[str, Any]:
-    tail = service.ledger_tail(last_n=last_n)
-    recent_actions = [
-        {
-            "action_id": item.get("action_id"),
-            "family": item.get("family"),
-            "state": item.get("state"),
-            "failure_reason_codes": item.get("failure_reason_codes", []),
-        }
-        for item in tail.get("recent_actions", [])
-        if isinstance(item, dict)
-    ]
-    pending_families = sorted(
-        {
-            str(item.get("family"))
-            for item in tail.get("open_obligations", [])
-            if isinstance(item, dict) and item.get("family")
-        }
-    )
-    return TranscriptStatusResult(
-        recent_actions=recent_actions,
-        pending_families=pending_families,
-        open_obligation_count=len(tail.get("open_obligations", [])),
-    ).model_dump(mode="json")
+    payload = _transcript_status_snapshot(service, last_n=last_n)
+    wait_budget_sec = _transcript_status_wait_budget(payload)
+    if wait_budget_sec <= 0.0:
+        return payload
+
+    deadline = time.monotonic() + wait_budget_sec
+    best = payload
+    best_signature = _transcript_status_signature(payload)
+    while time.monotonic() < deadline:
+        time.sleep(min(_STATUS_POLL_INTERVAL_SEC, max(deadline - time.monotonic(), 0.0)))
+        candidate = _transcript_status_snapshot(service, last_n=last_n)
+        candidate_signature = _transcript_status_signature(candidate)
+        if candidate_signature != best_signature:
+            best = candidate
+            best_signature = candidate_signature
+            if candidate.get("open_obligation_count", 0) == 0:
+                return candidate
+    return best
 
 
 def register_transcript_tools(
@@ -139,14 +246,16 @@ def register_transcript_tools(
     def family_decide(
         family: str,
         proposed_args: dict[str, Any] | None = None,
+        wait_for_previous: bool | None = None,
     ) -> ToolResult:
+        del wait_for_previous
         payload = transcript_decision_payload(
             service,
             family=family,
             proposed_args=proposed_args,
             baseline_policy=baseline_policy,
         )
-        return _summary(f"{family}: {payload['verdict']}", payload)
+        return _summary(transcript_decision_summary_text(payload), payload)
 
     @server.tool(
         name="family.execute",
@@ -155,22 +264,22 @@ def register_transcript_tools(
     def family_execute(
         family: str,
         proposed_args: dict[str, Any] | None = None,
+        wait_for_previous: bool | None = None,
     ) -> ToolResult:
+        del wait_for_previous
         payload = transcript_execute_payload(
             service,
             family=family,
             proposed_args=proposed_args,
             baseline_policy=baseline_policy,
         )
-        return _summary(f"{family}: {payload['status']}", payload)
+        return _summary(transcript_execute_summary_text(payload), payload)
 
     @server.tool(
         name="family.status",
         output_schema=TranscriptStatusResult.model_json_schema(),
     )
-    def family_status(last_n: int = 10) -> ToolResult:
+    def family_status(last_n: int = 10, wait_for_previous: bool | None = None) -> ToolResult:
+        del wait_for_previous
         payload = transcript_status_payload(service, last_n=last_n)
-        return _summary(
-            f"status: {payload['open_obligation_count']} open obligations",
-            payload,
-        )
+        return _summary(transcript_status_summary_text(payload), payload)

@@ -25,12 +25,14 @@ class ReplayRecorder:
         self,
         *,
         default_metadata: dict[str, Any] | None = None,
+        stream_path: str | Path | None = None,
     ) -> None:
         self.records: list[ReplayRecord] = []
         self.default_metadata = {
             "run_id": str(uuid4()),
             **(default_metadata or {}),
         }
+        self.stream_path = Path(stream_path) if stream_path is not None else None
 
     def record(
         self,
@@ -56,6 +58,10 @@ class ReplayRecorder:
             },
         )
         self.records.append(record)
+        if self.stream_path is not None:
+            self.stream_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.stream_path.open("a", encoding="utf-8") as handle:
+                handle.write(record.model_dump_json() + "\n")
         return record
 
     def record_view_request(self, family: str, proposed_args: dict[str, Any]) -> ReplayRecord:

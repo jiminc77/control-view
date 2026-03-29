@@ -28,6 +28,7 @@ class ExecuteGuardedRequest(BaseModel):
     family: str
     canonical_args: dict[str, Any] = Field(default_factory=dict)
     lease_token: LeaseToken
+    wait_for_previous: bool | None = None
 
 
 class ExplainBlockersRequest(BaseModel):

@@ -220,15 +220,13 @@ def main(argv: list[str] | None = None) -> int:
             "PROMPT_FILE": str(paths["prompt_file"]),
             "REPLAY_JSONL": str(paths["replay_jsonl"]),
             "OBSERVER_JSONL": str(paths["observer_jsonl"]),
+            "FAULT_EVENTS_JSONL": str(paths["fault_events_jsonl"]),
             "GEMINI_LOG": str(paths["gemini_log"]),
             "METRICS_JSON": str(paths["metrics_json"]),
             "OUTPUT_ROOT": str(run_root),
             "CONTROL_VIEW_ARTIFACTS_DIR": str(paths["artifacts_dir"]),
         }
     )
-    if args.baseline == "B0" and not env.get("ROS_MCP_BASELINE_COMMAND"):
-        raise SystemExit("ROS_MCP_BASELINE_COMMAND is required for live B0 runs")
-
     injector_process = None
     if scenario.get("steps"):
         injector_process = subprocess.Popen(
@@ -241,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
                 str(scenario_path),
                 "--artifacts-dir",
                 str(paths["artifacts_dir"]),
+                "--observer-jsonl",
+                str(paths["observer_jsonl"]),
                 "--seed",
                 str(args.seed),
                 "--output-jsonl",

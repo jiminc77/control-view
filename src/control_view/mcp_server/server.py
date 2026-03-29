@@ -18,4 +18,5 @@ def build_server(
         register_transcript_tools(server, service, baseline_policy=baseline_policy)
     else:
         register_tools(server, service)
+        register_transcript_tools(server, service, baseline_policy=baseline_policy)
     return server

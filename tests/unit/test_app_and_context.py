@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from control_view.app import main
@@ -35,6 +36,16 @@ def build_context_service() -> ControlViewService:
     )
     backend.set_slot("battery.margin", {"margin_fraction": 0.6, "reserve_fraction": 0.2})
     return ControlViewService(ROOT, backend=backend)
+
+
+class SlowWarmupBackend(FakeBackend):
+    def prepare_control_view(
+        self,
+        family: str,
+        canonical_args: dict[str, object] | None = None,
+    ) -> None:
+        if family == "GOTO":
+            time.sleep(0.35)
 
 
 def test_app_dry_run_with_fake_backend() -> None:
@@ -117,6 +128,52 @@ def test_hold_treats_auto_takeoff_hover_as_holding_phase() -> None:
 
     assert nav_progress is not None
     assert nav_progress.value_json["phase"] == "HOLDING"
+
+
+def test_goto_treats_near_target_hover_as_arrived_phase() -> None:
+    service = build_context_service()
+    service.backend.set_slot("vehicle.mode", "AUTO.LOITER")
+
+    service.get_control_view(
+        "GOTO",
+        {"target_pose": {"position": {"x": 0.0, "y": 0.0, "z": 2.0}, "frame_id": "map"}},
+    )
+    nav_progress = service.snapshots.get("nav.progress")
+
+    assert nav_progress is not None
+    assert nav_progress.value_json["phase"] == "ARRIVED"
+
+
+def test_goto_refreshes_guard_slots_after_warmup_delay() -> None:
+    backend = SlowWarmupBackend()
+    backend.set_slot("vehicle.connected", True)
+    backend.set_slot("vehicle.armed", True)
+    backend.set_slot("vehicle.mode", "POSCTL")
+    backend.set_slot(
+        "pose.local",
+        {
+            "position": {"x": 0.0, "y": 0.0, "z": 2.0},
+            "frame_id": "map",
+            "child_frame_id": "base_link",
+        },
+        frame_id="map",
+    )
+    backend.set_slot("velocity.local", {"linear": {"x": 0.0, "y": 0.0, "z": 0.0}})
+    backend.set_slot("estimator.health", {"score": 0.99})
+    backend.set_slot("failsafe.state", {"active": False})
+    backend.set_slot(
+        "offboard.stream.ok",
+        {"value": True, "publish_rate_hz": 20.0, "last_publish_age_ms": 10.0},
+    )
+    backend.set_slot("battery.margin", {"margin_fraction": 0.6, "reserve_fraction": 0.2})
+    service = ControlViewService(ROOT, backend=backend)
+
+    result = service.get_control_view(
+        "GOTO",
+        {"target_pose": {"position": {"x": 1.0, "y": 0.0, "z": 2.0}, "frame_id": "map"}},
+    )
+
+    assert result.verdict == Verdict.ACT
 
 
 def test_rtl_can_materialize_home_ready_from_home_position_dependency() -> None:

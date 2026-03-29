@@ -101,6 +101,9 @@ ros2 service type /mavros/cmd/command
 ```
 
 `/mavros/state`에서 `connected: true`가 보여야 합니다.
+실제 재실행 때는 `system_status`가 `0`이 아닌 값까지 확인하는 편이 안전합니다.
+`system_status: 0`이 오래 지속되거나 기체가 뒤집힌 자세로 뜨면 stale Gazebo world를 재사용한 경우가 많으니
+남아 있는 `gz sim`, PX4, MAVROS 프로세스를 종료하고 다시 올립니다.
 
 ## 4. Sidecar / Observer 수동 실행
 
@@ -156,6 +159,9 @@ source .venv/bin/activate
 export PX4_ROOT=${PX4_ROOT:-/abs/path/to/PX4-Autopilot}
 ./scripts/run_sitl_smoke.sh takeoff_hold_land goto_hold_land goto_rtl
 ```
+
+이 스크립트는 시작 전에 남아 있는 `gz sim`, PX4 SITL, MAVROS 프로세스를 정리해서
+dirty simulation world를 물고 올라오지 않게 합니다.
 
 생성 파일:
 

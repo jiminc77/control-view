@@ -79,6 +79,7 @@ BASELINE=B1 ./scripts/run_gemini_headless_demo.sh goto_hold_land
 ```
 
 - `run_sitl_smoke.sh`는 PX4 SITL, MAVROS, sidecar dry-run, nominal mission runner를 한 번에 실행합니다.
+- `run_sitl_smoke.sh`는 시작 전에 남아 있는 `gz sim` / PX4 / MAVROS 프로세스를 정리해 dirty world 재사용을 막습니다.
 - `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남깁니다.
 - `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation, budget 조건을 적용하고 `official_trace_ready`를 함께 표시합니다.
 - `run_live_experiments.py`는 `artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/` 아래에 live 결과를 정리합니다.
