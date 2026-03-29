@@ -366,7 +366,9 @@ uv run python scripts/run_replay_experiments.py \
 ### 해석
 
 - `B2`가 `ttl=2`에서는 맞고 `ttl=10`에서는 무너진다면, 그 자체가 TTL-only 한계를 보여줍니다.
-- `premature_transition_rate`와 `obligation_closure_accuracy`는 `B1/B2`와 `B3`를 가르는 핵심 값입니다.
+- `unsafe_act_after_fault`와 `interface_mismatch_rate`가 `B1/B2`와 `B3`를 가르는 1차 지표입니다.
+- `premature_transition_rate`와 `obligation_closure_accuracy`는 `ack_without_confirm` 같은 특정 fault에서 weak-ack handling을 해석할 때 보조 지표로 봅니다. 항상 baseline separation을 단독으로 설명하지는 않습니다.
+- revision drift fault는 `stale_action_rate`가 핵심 확인값입니다.
 - `unsafe_act_after_fault`가 0이 아니면 safety regression입니다.
 
 ## 7. E4. Live System Validation
@@ -437,6 +439,12 @@ uv run python scripts/run_live_experiments.py \
 - `post_fault_token_spend`
 
 위 값은 `summary.json`과 `metrics/summary.json`에 나뉘어 들어갑니다.
+
+`t3_recovery`의 현재 시나리오는 fault injection step이 2개이므로, 성공 run에서는 아래가 함께 확인되어야 합니다.
+
+- `fault_event_count == 2`
+- `observer_summary.fault_count == 2`
+- `observer_summary.recovered_fault_count == 2`
 
 ### 결과 표 정리
 

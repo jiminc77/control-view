@@ -18,8 +18,8 @@ freshness:
   ttl_ms: {low: 5000, medium: 2000, high: 2000}
   lease_ms: 100
 invalidators:
+  - geofence_revision_update
   - geofence_revision_bump
   - any_motion_family_requested
 serialization_policy:
   include: [value, authority_source, observed_age_ms, revision]
-

@@ -218,7 +218,7 @@ class Governor:
     ) -> ValidState:
         if entry is None:
             return ValidState.MISSING
-        if entry.valid_state == ValidState.MISSING:
+        if entry.valid_state != ValidState.VALID:
             return entry.valid_state
         if any(code.startswith("source_disagreement") for code in entry.reason_codes):
             return ValidState.DISAGREED

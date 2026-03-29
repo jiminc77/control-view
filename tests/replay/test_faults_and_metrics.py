@@ -270,5 +270,47 @@ def test_oracle_exposes_labels_for_replay_metrics() -> None:
 
     assert decision.labels["arrival"] is True
     assert decision.labels["stale_action"] is True
-    assert decision.labels["premature_transition"] is True
+    assert decision.labels["premature_transition"] is False
     assert decision.labels["no_progress"] is True
+
+
+def test_oracle_refuses_low_risk_family_when_other_obligation_is_open() -> None:
+    from control_view.replay.oracle import RuleBasedOracle
+
+    decision = RuleBasedOracle().evaluate(
+        "ARM",
+        {
+            "critical_slots": {
+                "vehicle.connected": {"valid_state": "VALID", "value_json": {"value": True}},
+            },
+            "blockers": [{"kind": "pending_transition", "slot_id": "open_obligations"}],
+            "open_obligations": [{"status": "OPEN"}],
+        },
+    )
+
+    assert decision.verdict == "REFUSE"
+    assert decision.labels["stale_action"] is False
+    assert decision.labels["premature_transition"] is False
+
+
+def test_oracle_safe_holds_high_risk_family_when_obligation_is_open() -> None:
+    from control_view.replay.oracle import RuleBasedOracle
+
+    decision = RuleBasedOracle().evaluate(
+        "LAND",
+        {
+            "critical_slots": {
+                "vehicle.connected": {"valid_state": "VALID", "value_json": {"value": True}},
+                "vehicle.armed": {"valid_state": "VALID", "value_json": {"value": True}},
+                "pose.local": {
+                    "valid_state": "VALID",
+                    "value_json": {"position": {"x": 0.0, "y": 0.0, "z": 1.0}},
+                },
+                "estimator.health": {"valid_state": "VALID", "value_json": {"score": 0.95}},
+            },
+            "blockers": [{"kind": "pending_transition", "slot_id": "open_obligations"}],
+            "open_obligations": [{"status": "OPEN"}],
+        },
+    )
+
+    assert decision.verdict == "SAFE_HOLD"

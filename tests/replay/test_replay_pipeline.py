@@ -263,3 +263,49 @@ def test_b2_ttl_sensitivity_depends_on_stale_timestamp() -> None:
 
     assert strict_output[0]["verdict"] == Verdict.REFRESH.value
     assert relaxed_output[0]["verdict"] == Verdict.ACT.value
+
+
+def test_b3_replay_preserves_explicitly_invalidated_geofence_slot() -> None:
+    backend = FakeBackend()
+    backend.set_slot("vehicle.connected", True)
+    backend.set_slot("vehicle.armed", True)
+    backend.set_slot(
+        "pose.local",
+        {
+            "position": {"x": 0.0, "y": 0.0, "z": 3.0},
+            "frame_id": "map",
+            "child_frame_id": "base_link",
+        },
+        frame_id="map",
+    )
+    backend.set_slot("estimator.health", {"score": 0.95})
+    backend.set_slot("failsafe.state", {"active": False})
+    backend.set_slot("tf.local_body", {"ready": True})
+    backend.set_slot(
+        "offboard.stream.ok",
+        {"value": True, "publish_rate_hz": 20.0, "last_publish_age_ms": 10.0},
+    )
+    backend.set_slot("vehicle.mode", "OFFBOARD")
+    service = ControlViewService(ROOT, backend=backend)
+    recorder = ReplayRecorder()
+
+    view = service.get_control_view(
+        "GOTO",
+        {
+            "target_pose": {
+                "position": {"x": 1.0, "y": 0.0, "z": 3.0},
+                "frame_id": "map",
+            }
+        },
+    )
+    recorder.record_view_result("GOTO", view.model_dump(mode="json"))
+
+    outputs = ReplayRunner(service).replay(
+        recorder.records,
+        fault_injector=FaultInjector(),
+        fault_name="geofence_revision_update",
+        policy_swap="B3",
+    )
+
+    assert outputs[0]["verdict"] == Verdict.SAFE_HOLD.value
+    assert outputs[0]["critical_slots"]["geofence.status"]["valid_state"] == "INVALIDATED"
