@@ -3,11 +3,34 @@ Prompt rules for `B0`:
 - Allowed tools: only the raw ROS tools exposed by the attached `ros-mcp-server` profile.
 - Available memory: the Gemini transcript plus prior raw tool outputs only. There is no semantic control-view state machine in `B0`.
 - Treat raw tool outputs as the source of truth. Infer progress directly from raw ROS state reported in those tool outputs.
-- Tool names and schemas depend on the attached raw server profile. Discover and use only the raw inspection, wait, publish, or service tools that are actually exposed.
+- Bootstrap the raw ROS session in this order and do it only once unless the connection is clearly broken:
+  - `connect_to_robot(ip='127.0.0.1', port=9090)`
+  - `detect_ros_version()`
+  - `get_topics()`
+  - `get_services()`
+  - `get_nodes()`
+- After bootstrap, stop generic discovery loops. Move directly to the MAVROS topics and services needed for the current family.
+- Tool names and schemas depend on the attached raw server profile. Use only the raw inspection, wait, publish, or service tools that are actually exposed.
+- Do not invent extra tool arguments that are not in the exposed schema. In particular, do not add wrapper flags such as `wait_for_previous` unless the tool explicitly declares them.
+- Assume the PX4 SITL stack exposes MAVROS on the standard ROS 2 names:
+  - state: `/mavros/state`
+  - altitude: `/mavros/global_position/rel_alt`
+  - local pose: `/mavros/local_position/pose`
+  - home/global reference: `/mavros/home_position/home` or `/mavros/global_position/global`
+  - arming service: `/mavros/cmd/arming`
+  - takeoff service: `/mavros/cmd/takeoff`
+  - mode service: `/mavros/set_mode`
+  - local setpoint topic: `/mavros/setpoint_position/local`
+- Family execution rules on the raw surface:
+  - `ARM`: call `/mavros/cmd/arming` with `mavros_msgs/srv/CommandBool` and confirm `armed=true` on `/mavros/state`.
+  - `TAKEOFF`: read the current home/global latitude and longitude first, then call `/mavros/cmd/takeoff` with `mavros_msgs/srv/CommandTOL` using that current geo reference plus target altitude `3.0`, and confirm via `/mavros/global_position/rel_alt` or `/mavros/local_position/pose`.
+  - `GOTO`: publish `geometry_msgs/msg/PoseStamped` setpoints at roughly `20 Hz` to `/mavros/setpoint_position/local`, switch to `OFFBOARD` with `/mavros/set_mode`, keep publishing while the target is not reached, and confirm arrival from `/mavros/local_position/pose`.
+  - `HOLD`: switch to `AUTO.LOITER` via `/mavros/set_mode` and confirm the vehicle remains airborne and stable.
+  - `LAND` or `RTL`: switch modes via `/mavros/set_mode` and stop only after raw state shows the vehicle is disarmed or near the ground.
 - Family completion rules on the raw surface:
   - `ARM`: advance only after raw state shows the vehicle is armed.
   - `TAKEOFF`: advance only after raw state shows altitude near `3.0` and the vehicle is still armed.
   - `GOTO`: advance only after raw state shows `|x-1.5| <= 0.5`, `|y-0.0| <= 0.5`, `|z-3.0| <= 0.7`, and the vehicle is still armed.
   - `HOLD`: after reaching the target, wait briefly and confirm the vehicle remains airborne and stable before advancing.
   - `LAND` or `RTL`: stop only after raw state shows the vehicle is disarmed or near the ground.
-- If takeoff or arm preconditions are not ready or not visible yet, wait and retry the same family. Do not assume any sidecar shortcut or hidden state.
+- If takeoff or arm preconditions are not ready or not visible yet, wait on the MAVROS state topics and retry the same family. Do not assume any sidecar shortcut or hidden state.

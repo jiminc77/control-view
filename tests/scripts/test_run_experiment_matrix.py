@@ -78,3 +78,40 @@ def test_remaining_jobs_skips_completed_entries() -> None:
     remaining = MODULE._remaining_jobs(jobs, job_status)
 
     assert [job.name for job in remaining] == ["job_b"]
+
+
+def test_live_reset_cmd_targets_reset_hook_with_job_context() -> None:
+    cmd = MODULE._live_reset_cmd(
+        root=ROOT,
+        hook=ROOT / "scripts" / "reset_live_stack.sh",
+        stamp="20260330_test",
+        job_name="E2_t1_high_B0_seed11",
+        attempt=2,
+    )
+
+    assert cmd[:2] == ["bash", str(ROOT / "scripts" / "reset_live_stack.sh")]
+    assert "--stamp" in cmd
+    assert "20260330_test" in cmd
+    assert "--job-name" in cmd
+    assert "E2_t1_high_B0_seed11" in cmd
+    assert cmd[-1] == "2"
+
+
+def test_dry_run_reports_default_live_reset_hook() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "run_experiment_matrix.py"),
+            "--bundle",
+            "core",
+            "--dry-run",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    payload = json.loads(completed.stdout)
+    assert payload["live_reset_hook"] == str(ROOT / "scripts" / "reset_live_stack.sh")

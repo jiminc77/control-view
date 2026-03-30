@@ -36,6 +36,7 @@ RETRYABLE_PATTERNS = (
     "socket hang up",
     "stream disconnected",
 )
+LIVE_PHASES = {"live_e2", "live_e4"}
 
 
 @dataclass(frozen=True)
@@ -467,6 +468,36 @@ def _record_builtin_status(
     _save_job_status(metadata_root, job_status)
 
 
+def _default_live_reset_hook(root: Path) -> Path:
+    return root / "scripts" / "reset_live_stack.sh"
+
+
+def _needs_live_reset(job: Job) -> bool:
+    return job.phase in LIVE_PHASES
+
+
+def _live_reset_cmd(
+    *,
+    root: Path,
+    hook: Path,
+    stamp: str,
+    job_name: str,
+    attempt: int,
+) -> list[str]:
+    return [
+        "bash",
+        str(hook),
+        "--root",
+        str(root),
+        "--stamp",
+        stamp,
+        "--job-name",
+        job_name,
+        "--attempt",
+        str(attempt),
+    ]
+
+
 def _run_job_with_retries(
     *,
     root: Path,
@@ -476,6 +507,8 @@ def _run_job_with_retries(
     max_attempts: int,
     backoff_sec: list[int],
     job_timeout_sec: int,
+    stamp: str,
+    live_reset_hook: Path | None,
 ) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     for attempt in range(1, max_attempts + 1):
@@ -491,6 +524,68 @@ def _run_job_with_retries(
         _save_job_status(metadata_root, job_status)
 
         log_path = _job_log_path(metadata_root, job_name=job.name, attempt=attempt)
+        if live_reset_hook is not None and _needs_live_reset(job):
+            reset_cmd = _live_reset_cmd(
+                root=root,
+                hook=live_reset_hook,
+                stamp=stamp,
+                job_name=job.name,
+                attempt=attempt,
+            )
+            reset_completed = subprocess.run(
+                reset_cmd,
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            reset_output = (reset_completed.stdout or "") + (reset_completed.stderr or "")
+            if reset_output:
+                log_path.write_text(reset_output, encoding="utf-8")
+            if reset_completed.returncode != 0:
+                retryable = attempt < max_attempts
+                attempt_payload = {
+                    "attempt": attempt,
+                    "returncode": reset_completed.returncode,
+                    "retryable": retryable,
+                    "reset_failed": True,
+                    "cmd": reset_cmd,
+                    "log_path": str(log_path),
+                }
+                if retryable:
+                    sleep_sec = (
+                        backoff_sec[min(attempt - 1, len(backoff_sec) - 1)]
+                        if backoff_sec
+                        else 0
+                    )
+                    attempt_payload["backoff_sec"] = sleep_sec
+                    attempts.append(attempt_payload)
+                    job_status[job.name] = {
+                        "phase": job.phase,
+                        "name": job.name,
+                        "status": "retry_scheduled",
+                        "returncode": reset_completed.returncode,
+                        "cmd": job.cmd,
+                        "attempt_count": attempt,
+                        "attempts": attempts,
+                        "last_log_path": str(log_path),
+                        "next_backoff_sec": sleep_sec,
+                    }
+                    _save_job_status(metadata_root, job_status)
+                    if sleep_sec > 0:
+                        time.sleep(sleep_sec)
+                    continue
+                attempts.append(attempt_payload)
+                return {
+                    "phase": job.phase,
+                    "name": job.name,
+                    "status": "failed_reset",
+                    "returncode": reset_completed.returncode,
+                    "cmd": job.cmd,
+                    "attempt_count": attempt,
+                    "attempts": attempts,
+                    "last_log_path": str(log_path),
+                }
         process = subprocess.Popen(
             job.cmd,
             cwd=root,
@@ -704,6 +799,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--retry-backoff-sec", default="180,300,600")
     parser.add_argument("--job-timeout-sec", type=int, default=900)
+    parser.add_argument("--live-reset-hook", type=Path, default=None)
+    parser.add_argument("--skip-live-reset", action="store_true")
     parser.add_argument("--force-clean", action="store_true")
     return parser
 
@@ -715,6 +812,9 @@ def main(argv: list[str] | None = None) -> int:
     seeds = _parse_seeds(args.seeds)
     stamp = args.resume_stamp or args.stamp or _stamp()
     backoff_sec = _parse_backoff(args.retry_backoff_sec)
+    live_reset_hook = None
+    if not args.skip_live_reset:
+        live_reset_hook = (args.live_reset_hook or _default_live_reset_hook(root)).resolve()
     jobs = _bundle_jobs(root, bundle=args.bundle, seeds=seeds, output_root=output_root)
     metadata_root = _metadata_root(root, stamp)
     job_status = _load_job_status(metadata_root)
@@ -732,6 +832,7 @@ def main(argv: list[str] | None = None) -> int:
         "max_attempts": args.max_attempts,
         "retry_backoff_sec": backoff_sec,
         "job_timeout_sec": args.job_timeout_sec,
+        "live_reset_hook": str(live_reset_hook) if live_reset_hook is not None else None,
         "job_count": len(jobs),
         "jobs": [{"phase": job.phase, "name": job.name, "cmd": job.cmd} for job in jobs],
     }
@@ -826,6 +927,8 @@ def main(argv: list[str] | None = None) -> int:
             max_attempts=max(args.max_attempts, 1),
             backoff_sec=backoff_sec,
             job_timeout_sec=max(args.job_timeout_sec, 1),
+            stamp=stamp,
+            live_reset_hook=live_reset_hook,
         )
         job_status[job.name] = outcome
         _save_job_status(metadata_root, job_status)

@@ -20,6 +20,7 @@ family-specific typed state를 유지하는 sidecar MCP server입니다. 현재 
 - replay harness는 `B1/B2/B3` baseline remap, slot ablation, oracle labels, fault injection을 지원
 - `B0/B1/B3`는 모두 Gemini CLI + MCP로 headless 실행 가능하다
 - official `B0`는 Gemini 전역 설정에 등록된 real `ros-mcp-server`를 그대로 사용한다
+- official `B0` live run은 `rosbridge` websocket `127.0.0.1:9090`이 먼저 떠 있어야 한다
 - official `B3` live run은 model-only `family.step` surface만 사용한다
 - `B2`는 live Gemini baseline이 아니라 replay-only structured-cache baseline으로 유지
 - observer node가 `B0/B1/B3`와 무관하게 동일한 ROS topic stream을 관찰해 mission success와 recovery를 기록
@@ -88,5 +89,6 @@ BASELINE=B1 ./scripts/run_gemini_headless_demo.sh goto_hold_land
 - `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남깁니다.
 - `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation, budget 조건을 적용하고 `official_trace_ready`를 함께 표시합니다.
 - `run_live_experiments.py`는 `artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/` 아래에 live 결과를 정리합니다.
+- `reset_live_stack.sh`는 PX4 SITL, MAVROS, rosbridge를 clean reset하고 live job 전 공통 준비 상태를 맞춥니다.
 - `run_gemini_headless_demo.sh`는 `B0/B1/B3` 모두 Gemini CLI MCP session을 실행하고 metrics JSON만 남깁니다.
 - official live summary는 raw Gemini conversation log 대신 `metrics/summary.json`의 token/tool-call/runtime 요약을 사용합니다.

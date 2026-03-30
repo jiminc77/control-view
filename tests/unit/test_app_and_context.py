@@ -4,6 +4,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from control_view.app import main
 from control_view.backend.fake_backend import FakeBackend
 from control_view.common.time import monotonic_ns
@@ -206,6 +208,30 @@ def test_ledger_tail_can_filter_since_mono_ns() -> None:
     recent = service.ledger_tail(since_mono_ns=marker)
 
     assert recent["recent_events"]
+
+
+def test_service_normalizes_family_names_case_insensitively() -> None:
+    service = build_context_service()
+
+    view = service.get_control_view(
+        "goto",
+        {"target_pose": {"position": {"x": 1.0, "y": 0.0, "z": 2.0}, "frame_id": "map"}},
+    )
+    refresh = service.refresh_control_view(family="hold")
+    blockers = service.explain_blockers("land")
+    exec_result = service.execute_guarded("goto", view.canonical_args, view.lease_token)
+
+    assert view.family == "GOTO"
+    assert refresh.new_verdict == Verdict.ACT
+    assert blockers["suggested_safe_action"] == "HOLD"
+    assert exec_result.status.value in {"ACKED_STRONG", "ACKED_WEAK", "CONFIRMED"}
+
+
+def test_service_rejects_unknown_family_with_supported_list() -> None:
+    service = build_context_service()
+
+    with pytest.raises(ValueError, match="expected one of"):
+        service.get_control_view("spin")
 
 
 def test_goto_canonical_args_include_dynamic_nav_timeout() -> None:

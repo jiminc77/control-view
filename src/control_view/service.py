@@ -95,6 +95,16 @@ class ControlViewService:
         self._load_artifacts()
         self._sync_system_slots()
 
+    def _normalize_family_name(self, family: str) -> str:
+        candidate = str(family).strip()
+        if candidate in self.bundle.families:
+            return candidate
+        folded = candidate.replace("-", "_").replace(" ", "_").upper()
+        if folded in self.bundle.families:
+            return folded
+        supported = ", ".join(sorted(self.bundle.families))
+        raise ValueError(f"unknown family '{family}'. expected one of: {supported}")
+
     def _load_artifacts(self) -> None:
         self._sync_artifacts_from_disk()
 
@@ -158,6 +168,7 @@ class ControlViewService:
         family: str,
         proposed_args: dict[str, Any] | None = None,
     ) -> ControlViewResult:
+        family = self._normalize_family_name(family)
         self._sync_artifacts_from_disk()
         proposed = proposed_args or {}
         if self.recorder is not None:
@@ -192,6 +203,7 @@ class ControlViewService:
         if slots:
             self.materializer.refresh_slots(slots)
         if family:
+            family = self._normalize_family_name(family)
             result = self._evaluate_family(family, proposed_args or {}, refresh=True)
             return RefreshResult(
                 refreshed_slots=slots or self.compiled[family].required_slots,
@@ -210,6 +222,7 @@ class ControlViewService:
         canonical_args: dict[str, Any],
         lease_token: LeaseToken,
     ) -> ExecutionResult:
+        family = self._normalize_family_name(family)
         if self.recorder is not None:
             self.recorder.record_execute_request(
                 family,
@@ -227,6 +240,7 @@ class ControlViewService:
         family: str,
         proposed_args: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        family = self._normalize_family_name(family)
         result = self._evaluate_family(family, proposed_args or {}, refresh=True)
         return {
             "blockers": [item.model_dump(mode="json") for item in result.blockers],
@@ -281,6 +295,7 @@ class ControlViewService:
         refresh: bool,
         canonical_input: bool = False,
     ) -> ControlViewResult:
+        family = self._normalize_family_name(family)
         contract = self.bundle.families[family]
         compiled = self.compiled[family]
         canonical_args: dict[str, Any] = {}
@@ -443,6 +458,7 @@ class ControlViewService:
         b2_ttl_sec: float = 5.0,
         cached_slots: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        family = self._normalize_family_name(family)
         normalized_baseline = normalize_baseline_name(baseline)
         compiled = self.compiled[family]
         contract = self.bundle.families[family]

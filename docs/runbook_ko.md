@@ -142,9 +142,11 @@ uv run control-view-observer \
 ### `B0`
 
 `B0`는 sidecar를 띄우지 않습니다. Gemini CLI 전역 설정에 등록된 real `ros-mcp-server`를 그대로 씁니다.
+raw `ros-mcp-server`가 붙으려면 `rosbridge` websocket `127.0.0.1:9090`이 반드시 살아 있어야 합니다.
 
 ```bash
 gemini mcp list
+bash scripts/reset_live_stack.sh
 ```
 
 ## 5. Nominal Trace 재생성
