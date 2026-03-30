@@ -66,7 +66,25 @@ def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def _observer_event_state(path: Path, event_kind: str) -> tuple[int, bool]:
+def _payload_matches(payload: dict[str, Any], expected: dict[str, Any]) -> bool:
+    for key, expected_value in expected.items():
+        actual_value = payload.get(key)
+        if isinstance(expected_value, dict):
+            if not isinstance(actual_value, dict):
+                return False
+            if not _payload_matches(actual_value, expected_value):
+                return False
+            continue
+        if actual_value != expected_value:
+            return False
+    return True
+
+
+def _observer_event_state(
+    path: Path,
+    event_kind: str,
+    payload_match: dict[str, Any] | None = None,
+) -> tuple[int, bool]:
     if not path.exists():
         return 0, False
     match_count = 0
@@ -86,6 +104,10 @@ def _observer_event_state(path: Path, event_kind: str) -> tuple[int, bool]:
             record_type == "observer_event"
             and isinstance(payload, dict)
             and str(payload.get("event_kind")) == event_kind
+            and (
+                payload_match is None
+                or _payload_matches(payload, payload_match)
+            )
         ):
             match_count += 1
     return match_count, summary_seen
@@ -97,12 +119,17 @@ def _wait_for_observer_event(
     event_kind: str,
     occurrence: int,
     timeout_sec: float,
+    payload_match: dict[str, Any] | None = None,
 ) -> None:
     if observer_jsonl is None:
         raise RuntimeError("observer_jsonl is required for after_observer_event steps")
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() <= deadline:
-        match_count, summary_seen = _observer_event_state(observer_jsonl, event_kind)
+        match_count, summary_seen = _observer_event_state(
+            observer_jsonl,
+            event_kind,
+            payload_match,
+        )
         if match_count >= occurrence:
             return
         if summary_seen:
@@ -115,10 +142,14 @@ def _wait_for_observer_event(
     )
 
 
-def _observer_event_count(path: Path | None, event_kind: str) -> int:
+def _observer_event_count(
+    path: Path | None,
+    event_kind: str,
+    payload_match: dict[str, Any] | None = None,
+) -> int:
     if path is None:
         return 0
-    match_count, _ = _observer_event_state(path, event_kind)
+    match_count, _ = _observer_event_state(path, event_kind, payload_match)
     return match_count
 
 
@@ -298,6 +329,9 @@ def main(argv: list[str] | None = None) -> int:
             schedule_metadata: dict[str, Any] = {}
             if "after_observer_event" in step:
                 event_kind = str(step["after_observer_event"])
+                payload_match = step.get("observer_event_match")
+                if payload_match is not None and not isinstance(payload_match, dict):
+                    raise RuntimeError("observer_event_match must be a mapping")
                 occurrence = int(step.get("occurrence", 1))
                 timeout_sec = float(step.get("timeout_sec", 120.0))
                 delay_sec = float(step.get("delay_sec", 0.0))
@@ -306,6 +340,7 @@ def main(argv: list[str] | None = None) -> int:
                     event_kind=event_kind,
                     occurrence=occurrence,
                     timeout_sec=timeout_sec,
+                    payload_match=payload_match,
                 )
                 if delay_sec > 0:
                     time.sleep(delay_sec)
@@ -314,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
                     "delay_sec": delay_sec,
                     "occurrence": occurrence,
                 }
+                if payload_match is not None:
+                    schedule_metadata["observer_event_match"] = payload_match
             else:
                 scheduled_sec = float(step.get("at_sec", 0.0))
                 scheduled_ns = started_mono_ns + int(scheduled_sec * 1_000_000_000)
@@ -337,9 +374,13 @@ def main(argv: list[str] | None = None) -> int:
                     and expected_event is not None
                     and args.observer_jsonl is not None
                 ):
+                    expected_match = step.get("expect_observer_event_match")
+                    if expected_match is not None and not isinstance(expected_match, dict):
+                        raise RuntimeError("expect_observer_event_match must be a mapping")
                     baseline_count = _observer_event_count(
                         args.observer_jsonl,
                         str(expected_event),
+                        expected_match,
                     )
                     try:
                         _wait_for_observer_event(
@@ -347,6 +388,7 @@ def main(argv: list[str] | None = None) -> int:
                             event_kind=str(expected_event),
                             occurrence=baseline_count + 1,
                             timeout_sec=float(step.get("expect_timeout_sec", 5.0)),
+                            payload_match=expected_match,
                         )
                         details["effect_observed"] = str(expected_event)
                     except RuntimeError as exc:

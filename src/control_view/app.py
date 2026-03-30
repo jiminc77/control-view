@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sqlite-path", default=None)
     parser.add_argument("--record-jsonl", type=Path, default=None)
-    parser.add_argument("--tool-surface", choices=["full", "thin"], default="full")
+    parser.add_argument("--tool-surface", choices=["full", "thin", "model"], default="full")
     parser.add_argument("--baseline-policy", choices=list(BASELINE_NAMES), default="B3")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -87,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
             recorder.dump_jsonl(args.record_jsonl)
         print(message)
         return 0
+    if args.tool_surface == "model" and normalize_baseline_name(args.baseline_policy) != "B3":
+        raise SystemExit("tool surface 'model' only supports baseline B3")
     print(message)
     try:
         build_server(

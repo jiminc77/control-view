@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -26,6 +25,7 @@ _PENDING_STATUS_WAIT_SEC = {
     "RTL": 5.0,
     "LAND": 15.0,
 }
+_TERMINAL_ACTION_STATES = {"CONFIRMED", "FAILED", "EXPIRED"}
 
 
 def _summary(text: str, payload: dict[str, Any]) -> ToolResult:
@@ -34,45 +34,35 @@ def _summary(text: str, payload: dict[str, Any]) -> ToolResult:
         structured_content=payload,
     )
 
-
-def _json_text(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, sort_keys=True)
-
-
 def transcript_decision_summary_text(payload: dict[str, Any]) -> str:
-    return _json_text(
-        {
-            "family": payload.get("family"),
-            "verdict": payload.get("verdict"),
-            "canonical_args": payload.get("canonical_args", {}),
-            "blockers": payload.get("blockers", []),
-            "recommended_next": payload.get("recommended_next"),
-        }
+    blocker_count = len(payload.get("blockers", []))
+    return (
+        f"family={payload.get('family')} verdict={payload.get('verdict')} "
+        f"blockers={blocker_count} next={payload.get('recommended_next')}"
     )
 
 
 def transcript_execute_summary_text(payload: dict[str, Any]) -> str:
-    return _json_text(
-        {
-            "family": payload.get("family"),
-            "verdict": payload.get("verdict"),
-            "status": payload.get("status"),
-            "canonical_args": payload.get("canonical_args", {}),
-            "blockers": payload.get("blockers", []),
-            "abort_reason": payload.get("abort_reason"),
-            "next_check": payload.get("next_check"),
-            "action_id": payload.get("action_id"),
-        }
+    summary = (
+        f"family={payload.get('family')} verdict={payload.get('verdict')} "
+        f"status={payload.get('status')} next={payload.get('next_check')}"
     )
+    abort_reason = payload.get("abort_reason")
+    if abort_reason:
+        summary += f" abort={abort_reason}"
+    return summary
 
 
 def transcript_status_summary_text(payload: dict[str, Any]) -> str:
-    return _json_text(
-        {
-            "recent_actions": payload.get("recent_actions", [])[-5:],
-            "pending_families": payload.get("pending_families", []),
-            "open_obligation_count": payload.get("open_obligation_count", 0),
-        }
+    latest_action = "none"
+    recent_actions = payload.get("recent_actions", [])
+    if recent_actions:
+        action = recent_actions[0]
+        latest_action = f"{action.get('family')}:{action.get('state')}"
+    pending = ",".join(str(family) for family in payload.get("pending_families", [])) or "none"
+    return (
+        f"latest={latest_action} pending={pending} "
+        f"obligations={payload.get('open_obligation_count', 0)}"
     )
 
 
@@ -133,6 +123,52 @@ def _transcript_status_wait_budget(payload: dict[str, Any]) -> float:
     return 0.0
 
 
+def _latest_action_state(payload: dict[str, Any], family: str) -> str | None:
+    recent_actions = payload.get("recent_actions", [])
+    if not recent_actions:
+        return None
+    latest = recent_actions[0]
+    if latest.get("family") != family:
+        return None
+    state = latest.get("state")
+    return str(state) if state is not None else None
+
+
+def _settled_action_state(
+    service: ControlViewService,
+    *,
+    family: str,
+    fallback_status: str,
+) -> str:
+    if fallback_status not in {"ACKED_STRONG", "ACKED_WEAK"}:
+        return fallback_status
+    payload = _transcript_status_snapshot(service, last_n=3)
+    latest_state = _latest_action_state(payload, family)
+    if latest_state in _TERMINAL_ACTION_STATES:
+        return latest_state
+    if latest_state is None or fallback_status != "ACKED_STRONG":
+        return fallback_status
+    wait_budget_sec = _PENDING_STATUS_WAIT_SEC.get(family, 0.0)
+    if wait_budget_sec <= 0.0:
+        return fallback_status
+    deadline = time.monotonic() + wait_budget_sec
+    while time.monotonic() < deadline:
+        time.sleep(min(_STATUS_POLL_INTERVAL_SEC, max(deadline - time.monotonic(), 0.0)))
+        payload = _transcript_status_snapshot(service, last_n=3)
+        latest_state = _latest_action_state(payload, family)
+        if latest_state in _TERMINAL_ACTION_STATES:
+            return latest_state
+    return fallback_status
+
+
+def _execution_next_check(status: str) -> str:
+    if status in _TERMINAL_ACTION_STATES:
+        return "none"
+    if status in {"NOT_EXECUTED", "ABORTED", "FAILED"}:
+        return "family.decide"
+    return "family.status"
+
+
 def transcript_decision_payload(
     service: ControlViewService,
     *,
@@ -172,7 +208,7 @@ def transcript_execute_payload(
     proposed_args: dict[str, Any] | None = None,
     baseline_policy: str,
 ) -> dict[str, Any]:
-    transcript_status_payload(service, last_n=10)
+    transcript_status_payload(service, last_n=3)
     view = service.get_control_view(family, proposed_args or {})
     projected = baseline_view_payload(view.model_dump(mode="json"), baseline_policy)
     blockers = [
@@ -187,6 +223,7 @@ def transcript_execute_payload(
             status="NOT_EXECUTED",
             canonical_args=view.canonical_args,
             blockers=blockers,
+            next_check="family.decide",
         ).model_dump(mode="json")
 
     execution = service.execute_guarded(family, view.canonical_args, view.lease_token)
@@ -197,21 +234,27 @@ def transcript_execute_payload(
         },
         baseline_policy,
     )
+    settled_status = _settled_action_state(
+        service,
+        family=family,
+        fallback_status=str(execution_payload.get("status", execution.status.value)),
+    )
     return TranscriptExecutionResult(
         family=family,
         verdict=str(projected.get("verdict", view.verdict.value)),
-        status=str(execution_payload.get("status", execution.status.value)),
+        status=settled_status,
         action_id=execution.action_id,
         canonical_args=view.canonical_args,
         blockers=blockers,
         abort_reason=execution_payload.get("abort_reason"),
+        next_check=_execution_next_check(settled_status),
     ).model_dump(mode="json")
 
 
 def transcript_status_payload(
     service: ControlViewService,
     *,
-    last_n: int = 10,
+    last_n: int = 3,
 ) -> dict[str, Any]:
     payload = _transcript_status_snapshot(service, last_n=last_n)
     wait_budget_sec = _transcript_status_wait_budget(payload)
@@ -279,7 +322,7 @@ def register_transcript_tools(
         name="family.status",
         output_schema=TranscriptStatusResult.model_json_schema(),
     )
-    def family_status(last_n: int = 10, wait_for_previous: bool | None = None) -> ToolResult:
+    def family_status(last_n: int = 3, wait_for_previous: bool | None = None) -> ToolResult:
         del wait_for_previous
         payload = transcript_status_payload(service, last_n=last_n)
         return _summary(transcript_status_summary_text(payload), payload)

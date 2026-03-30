@@ -241,6 +241,7 @@ uv run python scripts/run_live_experiments.py \
 
 `run_live_experiments.py`는 실험별 artifact copy를 만들고,
 `run_gemini_headless_demo.sh`와 `live_fault_injector.py`를 묶어 실행합니다.
+여기서 `B0/B1/B3` 모두 Gemini CLI MCP path를 사용하며, `B3`는 model-only control-view surface를 사용합니다.
 
 ```bash
 uv run python scripts/run_live_experiments.py \

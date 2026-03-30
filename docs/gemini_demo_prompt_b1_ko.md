@@ -10,6 +10,8 @@ thin high-level family API만 사용해서 PX4 SITL 미션을 감독하세요.
 - 이전 tool 응답과 transcript memory를 사용해 다음 family를 선택하세요.
 - family id는 반드시 대문자 exact string만 사용하세요: `ARM`, `TAKEOFF`, `GOTO`, `HOLD`, `RTL`, `LAND`.
 - `family.execute`와 `family.status`를 같은 턴에 병렬로 호출하지 마세요.
+- 도구 호출 전 설명은 한 문장 이내로 제한하고, 다음 tool이 정해졌다면 바로 호출하세요.
+- `family.status`에는 `family` 파라미터를 넣지 마세요. `last_n`만 선택적으로 사용할 수 있고, 기본값 `3`이면 충분합니다.
 
 미션별 고정 규칙:
 - `takeoff_hold_land`: `ARM -> TAKEOFF -> HOLD -> LAND`
@@ -18,7 +20,7 @@ thin high-level family API만 사용해서 PX4 SITL 미션을 감독하세요.
 - `TAKEOFF`는 항상 `family.execute` 또는 `family.decide`에 `proposed_args={"target_altitude": 3.0}`를 넣으세요.
 - `goto_hold_land` 또는 `goto_rtl`에서 `GOTO`는 항상 `family.execute` 또는 `family.decide`에 `proposed_args={"target_pose":{"position":{"x":1.5,"y":0.0},"frame_id":"map"}}`를 넣으세요.
 - waypoint나 arg schema를 파일에서 다시 찾지 마세요. 위 고정 arg를 그대로 사용하세요.
-- 각 family 뒤에는 `family.status`로 recent actions를 짧게 확인하세요.
+- 각 family 뒤에는 `family.status(last_n=3)`로 recent actions를 짧게 확인하세요.
 
 완료 기준:
 - 미션이 terminal family까지 도달해야 합니다.

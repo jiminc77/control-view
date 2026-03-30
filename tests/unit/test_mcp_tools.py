@@ -36,13 +36,12 @@ def test_control_view_summary_text_exposes_canonical_args_and_lease_token() -> N
         "lease_expires_in_ms": 250,
     }
 
-    summary = json.loads(control_view_summary_text(payload))
+    summary = control_view_summary_text(payload)
 
-    assert summary["family"] == "ARM"
-    assert summary["verdict"] == "ACT"
-    assert summary["canonical_args"] == {}
-    assert summary["lease_token"]["lease_id"] == "lease-1"
-    assert summary["lease_expires_in_ms"] == 250
+    assert "family=ARM" in summary
+    assert "verdict=ACT" in summary
+    assert "blockers=0" in summary
+    assert "lease" in summary
 
 
 def test_explain_blockers_summary_text_lists_messages() -> None:
@@ -55,14 +54,12 @@ def test_explain_blockers_summary_text_lists_messages() -> None:
         "suggested_safe_action": "HOLD",
     }
 
-    summary = json.loads(explain_blockers_summary_text("TAKEOFF", payload))
+    summary = explain_blockers_summary_text("TAKEOFF", payload)
 
-    assert summary["family"] == "TAKEOFF"
-    assert summary["blockers"] == [
-        "takeoff requires target_altitude",
-        "predicate_failed",
-    ]
-    assert summary["suggested_safe_action"] == "HOLD"
+    assert "family=TAKEOFF" in summary
+    assert "blockers=2" in summary
+    assert "first=takeoff requires target_altitude" in summary
+    assert "safe=HOLD" in summary
 
 
 def test_ledger_tail_summary_text_surfaces_recent_actions_and_open_obligations() -> None:
@@ -80,14 +77,11 @@ def test_ledger_tail_summary_text_surfaces_recent_actions_and_open_obligations()
         ],
     }
 
-    summary = json.loads(ledger_tail_summary_text(payload))
+    summary = ledger_tail_summary_text(payload)
 
-    assert summary["recent_actions"][0]["family"] == "ARM"
-    assert summary["recent_actions"][1]["failure_reason_codes"] == ["lease_expired"]
-    assert summary["open_obligations"] == [
-        {"family": "GOTO", "kind": "NAV_PENDING", "status": "open"}
-    ]
-    assert summary["artifact_revisions"] == {"geofence": 2, "mission_spec": 1}
+    assert "latest=ARM:CONFIRMED" in summary
+    assert "obligations=1" in summary
+    assert "artifacts=2" in summary
 
 
 def test_raw_read_summary_text_surfaces_slot_values() -> None:

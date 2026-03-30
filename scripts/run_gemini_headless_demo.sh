@@ -6,6 +6,9 @@ MISSION="${1:-goto_hold_land}"
 BASELINE="${BASELINE:-${2:-B3}}"
 OUTPUT_FORMAT="${GEMINI_OUTPUT_FORMAT:-stream-json}"
 APPROVAL_MODE="${GEMINI_APPROVAL_MODE:-yolo}"
+MODEL_NAME="${GEMINI_MODEL:-}"
+BACKEND="${CONTROL_VIEW_BACKEND:-mavros}"
+BACKEND_CONFIG="${CONTROL_VIEW_BACKEND_CONFIG:-configs/backend_mavros.yaml}"
 STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 SERVER_NAME="${SERVER_NAME:-control-view-${BASELINE,,}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT/artifacts}"
@@ -45,7 +48,13 @@ if [[ -n "${FAULT_EVENTS_JSONL:-}" ]]; then
   OBSERVER_ARGS+=(--fault-events-jsonl "$FAULT_EVENTS_JSONL")
 fi
 
-gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
+MODEL_ARGS=()
+if [[ -n "$MODEL_NAME" ]]; then
+  MODEL_ARGS=(--model "$MODEL_NAME")
+fi
+
+export GEMINI_CLI_PREFER_MCP_STRUCTURED_CONTENT="${GEMINI_CLI_PREFER_MCP_STRUCTURED_CONTENT:-true}"
+
 cleanup() {
   gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
   if [[ -n "${OBSERVER_PID:-}" ]]; then
@@ -67,32 +76,56 @@ uv run control-view-observer "${OBSERVER_ARGS[@]}" &
 OBSERVER_PID=$!
 sleep 1
 
+uv run python "$ROOT/scripts/patch_gemini_cli_mcp_structured.py"
+
 case "$BASELINE" in
   B0)
+    gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
     if [[ -n "${ROS_MCP_BASELINE_COMMAND:-}" ]]; then
       SERVER_COMMAND="${ROS_MCP_BASELINE_COMMAND}"
     else
-      SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-raw-mcp --root \"$ROOT\" --backend mavros --artifact-dir \"${CONTROL_VIEW_ARTIFACTS_DIR:-$ROOT/artifacts}\" --record-jsonl \"$REPLAY_JSONL\""
+      SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-raw-mcp --root \"$ROOT\" --backend \"$BACKEND\" --backend-config \"$BACKEND_CONFIG\" --artifact-dir \"${CONTROL_VIEW_ARTIFACTS_DIR:-$ROOT/artifacts}\" --record-jsonl \"$REPLAY_JSONL\""
     fi
+    gemini mcp add "$SERVER_NAME" bash -lc \
+      "$SERVER_COMMAND"
+    gemini \
+      "${MODEL_ARGS[@]}" \
+      --include-directories "$ROOT" \
+      --allowed-mcp-server-names "$SERVER_NAME" \
+      --policy "$POLICY_FILE" \
+      --approval-mode "$APPROVAL_MODE" \
+      --output-format "$OUTPUT_FORMAT" \
+      --prompt "$MISSION_PROMPT" | tee "$GEMINI_LOG"
     ;;
   B1)
-    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend mavros --sqlite-path \"$SQLITE_PATH\" --tool-surface thin --baseline-policy B1 --record-jsonl \"$REPLAY_JSONL\""
+    gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
+    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend \"$BACKEND\" --backend-config \"$BACKEND_CONFIG\" --sqlite-path \"$SQLITE_PATH\" --tool-surface thin --baseline-policy B1 --record-jsonl \"$REPLAY_JSONL\""
+    gemini mcp add "$SERVER_NAME" bash -lc \
+      "$SERVER_COMMAND"
+    gemini \
+      "${MODEL_ARGS[@]}" \
+      --include-directories "$ROOT" \
+      --allowed-mcp-server-names "$SERVER_NAME" \
+      --policy "$POLICY_FILE" \
+      --approval-mode "$APPROVAL_MODE" \
+      --output-format "$OUTPUT_FORMAT" \
+      --prompt "$MISSION_PROMPT" | tee "$GEMINI_LOG"
     ;;
   B3)
-    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend mavros --sqlite-path \"$SQLITE_PATH\" --tool-surface full --baseline-policy B3 --record-jsonl \"$REPLAY_JSONL\""
+    gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
+    SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-sidecar --root \"$ROOT\" --backend \"$BACKEND\" --backend-config \"$BACKEND_CONFIG\" --sqlite-path \"$SQLITE_PATH\" --tool-surface model --baseline-policy B3 --record-jsonl \"$REPLAY_JSONL\""
+    gemini mcp add "$SERVER_NAME" bash -lc \
+      "$SERVER_COMMAND"
+    gemini \
+      "${MODEL_ARGS[@]}" \
+      --include-directories "$ROOT" \
+      --allowed-mcp-server-names "$SERVER_NAME" \
+      --policy "$POLICY_FILE" \
+      --approval-mode "$APPROVAL_MODE" \
+      --output-format "$OUTPUT_FORMAT" \
+      --prompt "$MISSION_PROMPT" | tee "$GEMINI_LOG"
     ;;
 esac
-
-gemini mcp add "$SERVER_NAME" bash -lc \
-  "$SERVER_COMMAND"
-
-gemini \
-  --include-directories "$ROOT" \
-  --allowed-mcp-server-names "$SERVER_NAME" \
-  --policy "$POLICY_FILE" \
-  --approval-mode "$APPROVAL_MODE" \
-  --output-format "$OUTPUT_FORMAT" \
-  --prompt "$MISSION_PROMPT" | tee "$GEMINI_LOG"
 
 stop_observer
 

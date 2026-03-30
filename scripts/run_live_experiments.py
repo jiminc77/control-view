@@ -217,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         {
             "BASELINE": args.baseline,
             "STAMP": stamp,
+            "SEED": str(args.seed),
             "PROMPT_FILE": str(paths["prompt_file"]),
             "REPLAY_JSONL": str(paths["replay_jsonl"]),
             "OBSERVER_JSONL": str(paths["observer_jsonl"]),

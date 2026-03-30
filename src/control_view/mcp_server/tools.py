@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastmcp import FastMCP
@@ -18,10 +17,6 @@ from control_view.mcp_server.tool_schemas import (
 from control_view.service import ControlViewService
 
 
-def _json_text(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
-
-
 def _blocker_messages(blockers: list[Any]) -> list[str]:
     messages: list[str] = []
     for blocker in blockers:
@@ -34,91 +29,51 @@ def _blocker_messages(blockers: list[Any]) -> list[str]:
 
 
 def control_view_summary_text(payload: dict[str, Any]) -> str:
-    summary = {
-        "family": payload.get("family"),
-        "verdict": payload.get("verdict"),
-        "canonical_args": payload.get("canonical_args", {}),
-        "blockers": _blocker_messages(payload.get("blockers", [])),
-        "open_obligation_families": [
-            obligation.get("family")
-            for obligation in payload.get("open_obligations", [])
-            if isinstance(obligation, dict) and obligation.get("family")
-        ],
-    }
-    lease_token = payload.get("lease_token")
-    if lease_token is not None:
-        summary["lease_token"] = lease_token
-        summary["lease_expires_in_ms"] = payload.get("lease_expires_in_ms")
-    return _json_text(summary)
+    blocker_count = len(_blocker_messages(payload.get("blockers", [])))
+    obligation_count = len(payload.get("open_obligations", []))
+    lease_state = "lease" if payload.get("lease_token") is not None else "no_lease"
+    return (
+        f"family={payload.get('family')} verdict={payload.get('verdict')} "
+        f"blockers={blocker_count} obligations={obligation_count} {lease_state}"
+    )
 
 
 def refresh_summary_text(scope: str, payload: dict[str, Any]) -> str:
-    return _json_text(
-        {
-            "scope": scope,
-            "new_verdict": payload.get("new_verdict"),
-            "refreshed_slots": payload.get("refreshed_slots", []),
-            "unresolved_blockers": _blocker_messages(payload.get("unresolved_blockers", [])),
-        }
+    unresolved = len(_blocker_messages(payload.get("unresolved_blockers", [])))
+    refreshed = len(payload.get("refreshed_slots", []))
+    return (
+        f"scope={scope} verdict={payload.get('new_verdict')} "
+        f"refreshed_slots={refreshed} unresolved={unresolved}"
     )
 
 
 def execute_summary_text(payload: dict[str, Any]) -> str:
-    return _json_text(
-        {
-            "status": payload.get("status"),
-            "action_id": payload.get("action_id"),
-            "opened_obligation_ids": payload.get("opened_obligation_ids", []),
-            "abort_reason": payload.get("abort_reason"),
-        }
-    )
+    opened = len(payload.get("opened_obligation_ids", []))
+    summary = f"status={payload.get('status')} action_id={payload.get('action_id')} opened={opened}"
+    abort_reason = payload.get("abort_reason")
+    if abort_reason:
+        summary += f" abort={abort_reason}"
+    return summary
 
 
 def explain_blockers_summary_text(family: str, payload: dict[str, Any]) -> str:
-    return _json_text(
-        {
-            "family": family,
-            "blockers": _blocker_messages(payload.get("blockers", [])),
-            "refresh_hints": payload.get("refresh_hints", []),
-            "suggested_safe_action": payload.get("suggested_safe_action"),
-        }
+    blockers = _blocker_messages(payload.get("blockers", []))
+    first_blocker = blockers[0] if blockers else "none"
+    return (
+        f"family={family} blockers={len(blockers)} first={first_blocker} "
+        f"safe={payload.get('suggested_safe_action')}"
     )
 
 
 def ledger_tail_summary_text(payload: dict[str, Any]) -> str:
-    recent_actions = []
-    for action in payload.get("recent_actions", [])[-5:]:
-        if not isinstance(action, dict):
-            continue
-        recent_actions.append(
-            {
-                "family": action.get("family"),
-                "state": action.get("state"),
-                "failure_reason_codes": action.get("failure_reason_codes", []),
-            }
-        )
-    open_obligations = []
-    for obligation in payload.get("open_obligations", []):
-        if not isinstance(obligation, dict):
-            continue
-        open_obligations.append(
-            {
-                "family": obligation.get("family"),
-                "kind": obligation.get("kind"),
-                "status": obligation.get("status"),
-            }
-        )
-    artifact_revisions = {
-        item.get("artifact_name"): item.get("revision")
-        for item in payload.get("artifact_revisions", [])
-        if isinstance(item, dict) and item.get("artifact_name") is not None
-    }
-    return _json_text(
-        {
-            "recent_actions": recent_actions,
-            "open_obligations": open_obligations,
-            "artifact_revisions": artifact_revisions,
-        }
+    latest_action = "none"
+    for action in payload.get("recent_actions", []):
+        if isinstance(action, dict):
+            latest_action = f"{action.get('family')}:{action.get('state')}"
+            break
+    return (
+        f"latest={latest_action} obligations={len(payload.get('open_obligations', []))} "
+        f"artifacts={len(payload.get('artifact_revisions', []))}"
     )
 
 
@@ -137,7 +92,9 @@ def register_tools(server: FastMCP, service: ControlViewService) -> None:
     def control_view_get(
         family: str,
         proposed_args: dict[str, Any] | None = None,
+        wait_for_previous: bool | None = None,
     ) -> ToolResult:
+        del wait_for_previous
         result = service.get_control_view(family, proposed_args or {})
         payload = result.model_dump(mode="json")
         return _summary(control_view_summary_text(payload), payload)
@@ -150,7 +107,9 @@ def register_tools(server: FastMCP, service: ControlViewService) -> None:
         family: str | None = None,
         slots: list[str] | None = None,
         proposed_args: dict[str, Any] | None = None,
+        wait_for_previous: bool | None = None,
     ) -> ToolResult:
+        del wait_for_previous
         result = service.refresh_control_view(
             family=family,
             slots=slots or [],
@@ -186,7 +145,9 @@ def register_tools(server: FastMCP, service: ControlViewService) -> None:
     def control_explain_blockers(
         family: str,
         proposed_args: dict[str, Any] | None = None,
+        wait_for_previous: bool | None = None,
     ) -> ToolResult:
+        del wait_for_previous
         payload = service.explain_blockers(family, proposed_args or {})
         return _summary(explain_blockers_summary_text(family, payload), payload)
 
@@ -197,6 +158,8 @@ def register_tools(server: FastMCP, service: ControlViewService) -> None:
     def ledger_tail(
         last_n: int = 20,
         since_mono_ns: int | None = None,
+        wait_for_previous: bool | None = None,
     ) -> ToolResult:
+        del wait_for_previous
         payload = service.ledger_tail(last_n=last_n, since_mono_ns=since_mono_ns)
         return _summary(ledger_tail_summary_text(payload), payload)

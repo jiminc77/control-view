@@ -101,8 +101,35 @@ def test_t3_recovery_uses_observer_event_triggers() -> None:
     ]
 
 
+def test_t2_spec_drift_uses_observer_event_match_for_geofence_shrink() -> None:
+    payload = yaml.safe_load((ROOT / "configs" / "experiments" / "t2_spec_drift.yaml").read_text())
+
+    assert payload["steps"][0]["after_observer_event"] == "airborne"
+    assert float(payload["steps"][0]["delay_sec"]) == 8.0
+    assert payload["steps"][1]["after_observer_event"] == "mode_changed"
+    assert payload["steps"][1]["observer_event_match"] == {"mode": "OFFBOARD"}
+    assert float(payload["steps"][1]["delay_sec"]) == 1.0
+
+
 def test_live_fault_injector_normalizes_yaml_boolean_off_token() -> None:
     module = _load_live_fault_injector_module()
 
     assert module._normalize_fault_token(False) == "off"
     assert module._normalize_fault_token("off") == "off"
+
+
+def test_live_fault_injector_matches_nested_observer_payload() -> None:
+    module = _load_live_fault_injector_module()
+
+    assert module._payload_matches(
+        {"event_kind": "mode_changed", "mode": "OFFBOARD", "position": {"x": 1.2}},
+        {"mode": "OFFBOARD"},
+    )
+    assert module._payload_matches(
+        {"event_kind": "mode_changed", "mode": "OFFBOARD", "position": {"x": 1.2}},
+        {"position": {"x": 1.2}},
+    )
+    assert not module._payload_matches(
+        {"event_kind": "mode_changed", "mode": "AUTO.LOITER", "position": {"x": 1.2}},
+        {"mode": "OFFBOARD"},
+    )

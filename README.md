@@ -10,7 +10,7 @@ family-specific typed state를 유지하는 sidecar MCP server입니다. 현재 
 - family contract와 field ontology를 YAML로 관리
 - runtime에서 현재 `Control View`를 materialize
 - validity governor, lease, obligation semantics로 guarded execution 수행
-- Gemini CLI 같은 LLM client에 baseline별 MCP surface 제공
+- baseline별 LLM runner에 맞는 structured control surface 제공
 - PX4 SITL + Gazebo + ROS 2 Jazzy 환경에서 replay / live validation / observer scoring 지원
 
 ## 현재 상태
@@ -18,7 +18,7 @@ family-specific typed state를 유지하는 sidecar MCP server입니다. 현재 
 - contracts / compiler / validation / runtime / guarded executor / obligation lifecycle 구현 완료
 - `MavrosBackend`는 ROS 2 Jazzy live adapter로 연결되며 preview warmup과 pre-dispatch abort persistence를 포함
 - replay harness는 `B1/B2/B3` baseline remap, slot ablation, oracle labels, fault injection을 지원
-- `B0/B1/B3` Gemini baseline은 headless script와 MCP config로 실행 가능
+- `B0/B1/B3`는 모두 Gemini CLI + MCP로 headless 실행 가능하며, `B3`는 model-only control-view surface를 사용
 - `B2`는 live Gemini baseline이 아니라 replay-only structured-cache baseline으로 유지
 - observer node가 `B0/B1/B3`와 무관하게 동일한 ROS topic stream을 관찰해 mission success와 recovery를 기록
 - `ReplayRecorder`는 decision request/result, action transition, obligation transition, mission boundary, observer event/summary를 JSONL로 기록
@@ -54,7 +54,8 @@ bash -n scripts/*.sh
 
 - `docs/runbook_ko.md`: 로컬 개발, sidecar/observer 실행, SITL 절차
 - `docs/experiments_ko.md`: `E1~E4` 재현 절차, output layout, 결과 표 정리 방식
-- `docs/gemini_demo_prompt_ko.md`: `B3` headless Gemini prompt
+- `docs/paper_experiment_plan_ko.md`: seed sweep, 전체 matrix, 논문용 집계 기준
+- `docs/gemini_demo_prompt_ko.md`: `B3` structured headless prompt
 - `docs/gemini_demo_prompt_b1_ko.md`: `B1` headless Gemini prompt
 - `docs/gemini_demo_prompt_b0_ko.md`: `B0` headless Gemini prompt
 
@@ -83,4 +84,4 @@ BASELINE=B1 ./scripts/run_gemini_headless_demo.sh goto_hold_land
 - `run_mission.py`는 mission별 replay JSONL과 metrics summary를 `artifacts/` 아래에 남깁니다.
 - `run_replay_experiments.py`는 recorded replay에 policy swap, fault injection, slot ablation, budget 조건을 적용하고 `official_trace_ready`를 함께 표시합니다.
 - `run_live_experiments.py`는 `artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/` 아래에 live 결과를 정리합니다.
-- `run_gemini_headless_demo.sh`는 `B0/B1/B3` baseline 중 하나를 선택해 Gemini session과 observer를 함께 실행하고 metrics JSON을 생성합니다.
+- `run_gemini_headless_demo.sh`는 `B0/B1/B3` 모두 Gemini CLI MCP session을 실행하고 metrics JSON을 생성합니다.
