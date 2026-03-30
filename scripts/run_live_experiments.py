@@ -34,15 +34,15 @@ def _stamp() -> str:
 
 def _default_prompt_file(root: Path, baseline: str) -> Path:
     mapping = {
-        "B0": root / "docs" / "gemini_demo_prompt_b0_ko.md",
-        "B1": root / "docs" / "gemini_demo_prompt_b1_ko.md",
-        "B3": root / "docs" / "gemini_demo_prompt_ko.md",
+        "B0": root / "docs" / "gemini_prompt_b0_raw_ros_ko.md",
+        "B1": root / "docs" / "gemini_prompt_b1_thin_transcript_ko.md",
+        "B3": root / "docs" / "gemini_prompt_b3_semantic_step_ko.md",
     }
     return mapping[baseline]
 
 
 def _common_prompt_file(root: Path) -> Path:
-    return root / "docs" / "gemini_demo_prompt_common_en.md"
+    return root / "docs" / "gemini_prompt_common_rules_en.md"
 
 
 def _copy_artifacts(root: Path, target: Path) -> None:

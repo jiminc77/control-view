@@ -23,15 +23,15 @@ KEEP_GEMINI_LOG="${KEEP_GEMINI_LOG:-0}"
 DYNAMIC_MCP_SERVER=0
 
 case "$BASELINE" in
-  B0) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_demo_prompt_b0_ko.md" ;;
-  B1) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_demo_prompt_b1_ko.md" ;;
-  B3) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_demo_prompt_ko.md" ;;
+  B0) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_prompt_b0_raw_ros_ko.md" ;;
+  B1) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_prompt_b1_thin_transcript_ko.md" ;;
+  B3) DEFAULT_PROMPT_FILE="$ROOT/docs/gemini_prompt_b3_semantic_step_ko.md" ;;
   *)
     echo "Unsupported baseline: $BASELINE" >&2
     exit 1
     ;;
 esac
-COMMON_PROMPT_FILE="${COMMON_PROMPT_FILE:-$ROOT/docs/gemini_demo_prompt_common_en.md}"
+COMMON_PROMPT_FILE="${COMMON_PROMPT_FILE:-$ROOT/docs/gemini_prompt_common_rules_en.md}"
 PROMPT_FILE="${PROMPT_FILE:-$DEFAULT_PROMPT_FILE}"
 
 mkdir -p "$(dirname "$REPLAY_JSONL")" "$(dirname "$OBSERVER_JSONL")" "$(dirname "$GEMINI_LOG")" "$(dirname "$METRICS_JSON")"

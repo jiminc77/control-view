@@ -1,4 +1,4 @@
-Baseline-specific rules for `B0`:
+Prompt rules for `B0` raw ROS baseline:
 
 - Allowed tools: only the raw ROS tools exposed by the attached `ros-mcp-server` profile.
 - Memory model: use the Gemini transcript plus prior raw tool outputs as your only working memory. There is no semantic control-view state machine in `B0`.
