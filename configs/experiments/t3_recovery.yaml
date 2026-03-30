@@ -2,8 +2,8 @@ name: t3_recovery
 mission: goto_hold_land
 prompt_appendix: |
   Recovery profile:
-  repeated OFFBOARD loss / mode flip fault가 두 번 들어올 수 있다.
-  recovery마다 unsafe act 없이 정상 시퀀스로 복귀하고 terminal stage까지 마무리해.
+  Two OFFBOARD-loss or mode-flip faults may occur.
+  After each recovery, return to the nominal sequence without unsafe action and finish the terminal stage.
 steps:
   - after_observer_event: excursion_reached
     delay_sec: 0

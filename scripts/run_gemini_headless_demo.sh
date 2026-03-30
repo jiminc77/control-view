@@ -28,11 +28,14 @@ case "$BASELINE" in
     exit 1
     ;;
 esac
+COMMON_PROMPT_FILE="${COMMON_PROMPT_FILE:-$ROOT/docs/gemini_demo_prompt_common_en.md}"
 PROMPT_FILE="${PROMPT_FILE:-$DEFAULT_PROMPT_FILE}"
 
 mkdir -p "$(dirname "$REPLAY_JSONL")" "$(dirname "$OBSERVER_JSONL")" "$(dirname "$GEMINI_LOG")" "$(dirname "$METRICS_JSON")"
 
-MISSION_PROMPT="$(cat "$PROMPT_FILE")
+MISSION_PROMPT="$(cat "$COMMON_PROMPT_FILE")
+
+$(cat "$PROMPT_FILE")
 
 Mission name: ${MISSION}
 Baseline: ${BASELINE}
@@ -53,7 +56,15 @@ if [[ -n "$MODEL_NAME" ]]; then
   MODEL_ARGS=(--model "$MODEL_NAME")
 fi
 
-export GEMINI_CLI_PREFER_MCP_STRUCTURED_CONTENT="${GEMINI_CLI_PREFER_MCP_STRUCTURED_CONTENT:-true}"
+if [[ "$BASELINE" == "B0" && -z "${ROS_MCP_BASELINE_COMMAND:-}" ]]; then
+  echo "B0 requires ROS_MCP_BASELINE_COMMAND for the raw ros-mcp-server baseline." >&2
+  exit 1
+fi
+
+# B0/B1 should preserve Gemini CLI's text/transcript tool path.
+# B3 still gets structured function responses because its model surface
+# returns empty content plus structuredContent only.
+export GEMINI_CLI_PREFER_MCP_STRUCTURED_CONTENT="false"
 
 cleanup() {
   gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
@@ -81,11 +92,7 @@ uv run python "$ROOT/scripts/patch_gemini_cli_mcp_structured.py"
 case "$BASELINE" in
   B0)
     gemini mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
-    if [[ -n "${ROS_MCP_BASELINE_COMMAND:-}" ]]; then
-      SERVER_COMMAND="${ROS_MCP_BASELINE_COMMAND}"
-    else
-      SERVER_COMMAND="cd \"$ROOT\" && uv run control-view-raw-mcp --root \"$ROOT\" --backend \"$BACKEND\" --backend-config \"$BACKEND_CONFIG\" --artifact-dir \"${CONTROL_VIEW_ARTIFACTS_DIR:-$ROOT/artifacts}\" --record-jsonl \"$REPLAY_JSONL\""
-    fi
+    SERVER_COMMAND="${ROS_MCP_BASELINE_COMMAND}"
     gemini mcp add "$SERVER_NAME" bash -lc \
       "$SERVER_COMMAND"
     gemini \

@@ -46,9 +46,9 @@ bash -n scripts/*.sh
 ## Baselines
 
 - `B0`: raw `ros-mcp-server` + transcript/session-summary memory
-- `B1`: thin high-level family API + transcript/session-summary memory
+- `B1`: thin high-level family API from the sidecar, but still transcript/session-summary memory
 - `B2`: replay-only simple structured-cache baseline
-- `B3`: full `Control View` system
+- `B3`: full `Control View` system with model-only semantic control-view state
 
 ## 문서
 

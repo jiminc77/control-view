@@ -2,8 +2,8 @@ name: t2_spec_drift
 mission: goto_hold_land
 prompt_appendix: |
   Spec-drift profile:
-  실험 중간에 mission spec과 geofence revision이 바뀔 수 있다.
-  다음 action을 결정하기 전에 revision 변화와 blocker를 반드시 확인해.
+  Mission-spec and geofence revisions may change mid-mission.
+  Before choosing the next family, check whether the active baseline exposes any revision change or blocker. If it does not expose that detail directly, say so and continue using only the exposed interface.
 steps:
   - after_observer_event: airborne
     delay_sec: 8

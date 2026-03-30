@@ -42,6 +42,10 @@ def _default_prompt_file(root: Path, baseline: str) -> Path:
     return mapping[baseline]
 
 
+def _common_prompt_file(root: Path) -> Path:
+    return root / "docs" / "gemini_demo_prompt_common_en.md"
+
+
 def _copy_artifacts(root: Path, target: Path) -> None:
     source_root = root / "artifacts"
     target.mkdir(parents=True, exist_ok=True)
@@ -200,9 +204,10 @@ def main(argv: list[str] | None = None) -> int:
 
     run_root.mkdir(parents=True, exist_ok=True)
     _copy_artifacts(root, paths["artifacts_dir"])
-    base_prompt = _default_prompt_file(root, args.baseline).read_text(encoding="utf-8")
+    common_prompt = _common_prompt_file(root).read_text(encoding="utf-8").rstrip()
+    baseline_prompt = _default_prompt_file(root, args.baseline).read_text(encoding="utf-8").rstrip()
     prompt_suffix = str(scenario.get("prompt_appendix", "")).strip()
-    prompt_text = base_prompt.rstrip() + "\n\n"
+    prompt_text = common_prompt + "\n\n" + baseline_prompt + "\n\n"
     prompt_text += f"Scenario: {args.scenario}\nExperiment: {args.experiment}\nSeed: {args.seed}\n"
     if prompt_suffix:
         prompt_text += "\n" + prompt_suffix + "\n"

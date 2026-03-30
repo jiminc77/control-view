@@ -2,7 +2,7 @@ name: t1_medium
 mission: goto_hold_land
 prompt_appendix: |
   Context-churn medium profile:
-  1. TAKEOFF 뒤 현재 상태를 한 문장으로 설명해.
-  2. GOTO 전 sidecar blocker 요약과 raw debug 필요 여부를 각각 한 문장으로 말해.
-  3. HOLD 전 남은 obligation이 있는지 짧게 점검해.
+  1. After TAKEOFF, give one short status sentence.
+  2. Before GOTO, give one short sentence on blockers or missing visibility under the active baseline.
+  3. Before HOLD, say whether any open obligation is visible under the active baseline.
 steps: []

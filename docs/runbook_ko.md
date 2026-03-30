@@ -300,6 +300,7 @@ artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/
 
 - high-level family API는 같음
 - transcript/session-summary memory baseline
+- model은 semantic `family.step` state machine이 아니라 `family.execute/status/decide` transcript를 따라감
 - replay에서는 current decision snapshot만 사용
 
 ### `B2`
@@ -314,6 +315,7 @@ artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/
 
 - raw `ros-mcp-server`
 - transcript/session-summary memory
+- model은 raw ROS/MCP transcript를 따르며 sidecar semantic state는 없음
 - replay 비교 지표는 비어 있거나 0일 수 있음
 
 ## 10. 자주 막히는 지점
