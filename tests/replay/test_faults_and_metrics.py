@@ -184,8 +184,6 @@ def test_metrics_include_observer_and_budget_fields() -> None:
                         "premature_transition": True,
                     },
                     "prompt_tokens_per_turn": 12.0,
-                    "decision_latency_ms": 100.0,
-                    "compressed": False,
                 },
             },
             {
@@ -209,12 +207,11 @@ def test_metrics_include_observer_and_budget_fields() -> None:
     assert metrics["stale_action_rate"] == 1.0
     assert metrics["premature_transition_rate"] == 1.0
     assert metrics["recovery_success_rate"] == 1.0
-    assert metrics["compression_count"] == 0
-    assert metrics["turns_until_first_compression"] == 0
+    assert metrics["mission_duration_ms"] == 3000.0
     assert metrics["post_fault_token_spend"] == 12.0
 
 
-def test_metrics_fall_back_to_gemini_turn_records_for_compression() -> None:
+def test_metrics_fall_back_to_gemini_turn_records_for_prompt_totals() -> None:
     metrics = compute_metrics(
         [
             {
@@ -223,8 +220,6 @@ def test_metrics_fall_back_to_gemini_turn_records_for_compression() -> None:
                 "metadata": {"mission_id": "m1"},
                 "payload": {
                     "prompt_tokens_per_turn": 7.0,
-                    "decision_latency_ms": 50.0,
-                    "compressed": False,
                 },
             },
             {
@@ -233,15 +228,11 @@ def test_metrics_fall_back_to_gemini_turn_records_for_compression() -> None:
                 "metadata": {"mission_id": "m1"},
                 "payload": {
                     "prompt_tokens_per_turn": 9.0,
-                    "decision_latency_ms": 70.0,
-                    "compressed": True,
                 },
             },
         ]
     )
 
-    assert metrics["compression_count"] == 1
-    assert metrics["turns_until_first_compression"] == 2
     assert metrics["cumulative_prompt_tokens"] == 16.0
 
 

@@ -5,7 +5,11 @@ import argparse
 import json
 from pathlib import Path
 
-from control_view.replay.gemini_logs import load_gemini_turn_metrics, merge_turn_metrics
+from control_view.replay.gemini_logs import (
+    load_gemini_run_summary,
+    load_gemini_turn_metrics,
+    merge_turn_metrics,
+)
 from control_view.replay.metrics import compute_metrics
 from control_view.replay.recorder import ReplayRecorder
 
@@ -28,8 +32,6 @@ def _turn_records(turn_metrics: list[dict], *, mission_id: str) -> list[dict]:
             "payload": {
                 "family": turn.get("family"),
                 "prompt_tokens_per_turn": turn.get("prompt_tokens_per_turn", 0.0),
-                "decision_latency_ms": turn.get("decision_latency_ms", 0.0),
-                "compressed": bool(turn.get("compressed")),
             },
         }
         for turn in turn_metrics
@@ -53,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     replay_records = _metric_records(args.replay_jsonl)
     observer_records = _metric_records(args.observer_jsonl)
     turn_metrics = load_gemini_turn_metrics(args.gemini_log)
+    gemini_summary = load_gemini_run_summary(args.gemini_log)
     if replay_records:
         merged_records = merge_turn_metrics(replay_records, turn_metrics)
     else:
@@ -61,8 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "replay_jsonl": str(args.replay_jsonl) if args.replay_jsonl else None,
         "observer_jsonl": str(args.observer_jsonl) if args.observer_jsonl else None,
-        "gemini_log": str(args.gemini_log),
         "turn_metrics_count": len(turn_metrics),
+        "gemini_summary": gemini_summary,
         "metrics": compute_metrics(
             merged_records,
             token_budget=args.token_budget,

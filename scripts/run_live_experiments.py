@@ -12,7 +12,6 @@ from typing import Any
 
 import yaml
 
-from control_view.replay.gemini_logs import load_gemini_turn_metrics
 from control_view.replay.recorder import ReplayRecorder
 
 SCENARIOS = {
@@ -89,6 +88,7 @@ def _summary_payload(
     metrics_payload = {}
     if paths["metrics_json"].exists():
         metrics_payload = json.loads(paths["metrics_json"].read_text(encoding="utf-8"))
+    gemini_summary = metrics_payload.get("gemini_summary", {}) or {}
     observer_records = _observer_records(paths["observer_jsonl"])
     observer_summary = next(
         (
@@ -99,32 +99,6 @@ def _summary_payload(
         {},
     )
     fault_records = _fault_records(paths["fault_events_jsonl"])
-    first_fault_mono_ns = (
-        min(int(record.get("applied_mono_ns") or 0) for record in fault_records)
-        if fault_records
-        else None
-    )
-    recovery_events = [
-        record
-        for record in observer_records
-        if record.get("record_type") == "observer_event"
-        and (record.get("payload", {}) or {}).get("event_kind") == "fault_recovered"
-    ]
-    first_recovery_mono_ns = (
-        min(int(record.get("recorded_mono_ns") or 0) for record in recovery_events)
-        if recovery_events
-        else None
-    )
-    turn_metrics = load_gemini_turn_metrics(paths["gemini_log"])
-    extra_tool_calls_until_recovery = 0
-    if first_fault_mono_ns is not None and first_recovery_mono_ns is not None:
-        extra_tool_calls_until_recovery = sum(
-            1
-            for turn in turn_metrics
-            if first_fault_mono_ns
-            <= int(turn.get("recorded_mono_ns") or 0)
-            <= first_recovery_mono_ns
-        )
     return {
         "experiment": experiment,
         "scenario": scenario.get("name"),
@@ -136,16 +110,15 @@ def _summary_payload(
         "artifacts_dir": str(paths["artifacts_dir"]),
         "replay_jsonl": str(paths["replay_jsonl"]),
         "observer_jsonl": str(paths["observer_jsonl"]),
-        "gemini_log": str(paths["gemini_log"]),
         "metrics_json": str(paths["metrics_json"]),
         "fault_events_jsonl": str(paths["fault_events_jsonl"]),
         "metrics": metrics_payload.get("metrics", {}),
+        "gemini_summary": gemini_summary,
         "observer_summary": observer_summary,
         "fault_event_count": len(fault_records),
         "manual_override_needed": bool(observer_summary.get("manual_override_needed")),
         "time_to_recovery_sec": observer_summary.get("time_to_first_recovery_sec"),
         "mission_completion_after_fault": observer_summary.get("mission_success"),
-        "extra_tool_calls_until_recovery": extra_tool_calls_until_recovery,
     }
 
 

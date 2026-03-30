@@ -12,17 +12,6 @@ _PROMPT_TOKEN_KEYS = {
     "input_tokens",
     "inputTokenCount",
 }
-_LATENCY_KEYS = {
-    "decision_latency_ms",
-    "latency_ms",
-    "latencyMs",
-}
-_COMPRESSION_KEYS = {
-    "compression_count",
-    "compressionCount",
-    "compressed",
-    "did_compress",
-}
 _TIMESTAMP_KEYS = {
     "recorded_mono_ns",
     "timestamp_ns",
@@ -63,30 +52,6 @@ def _first_text(payload: dict[str, Any], keys: set[str]) -> str | None:
     return None
 
 
-def _contains_token(value: Any, token: str) -> bool:
-    lowered = token.lower()
-    if isinstance(value, dict):
-        return any(_contains_token(item, token) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_token(item, token) for item in value)
-    if isinstance(value, str):
-        return lowered in value.lower()
-    return False
-
-
-def _compressed(payload: dict[str, Any]) -> bool:
-    for key, value in _iter_scalars(payload):
-        if key not in _COMPRESSION_KEYS:
-            continue
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)) and float(value) > 0:
-            return True
-        if isinstance(value, str) and value.strip().lower() in {"true", "compressed"}:
-            return True
-    return _contains_token(payload, "/compress") or _contains_token(payload, "compression")
-
-
 def load_gemini_turn_metrics(path: str | Path) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
     target = Path(path)
@@ -102,21 +67,47 @@ def load_gemini_turn_metrics(path: str | Path) -> list[dict[str, Any]]:
         if not isinstance(payload, dict):
             continue
         prompt_tokens = _first_number(payload, _PROMPT_TOKEN_KEYS)
-        latency_ms = _first_number(payload, _LATENCY_KEYS)
         recorded_mono_ns = _first_number(payload, _TIMESTAMP_KEYS)
         family = _first_text(payload, _FAMILY_KEYS)
-        if prompt_tokens is None and latency_ms is None:
+        if prompt_tokens is None:
             continue
         metrics.append(
             {
                 "family": family,
                 "prompt_tokens_per_turn": prompt_tokens or 0.0,
-                "decision_latency_ms": latency_ms or 0.0,
-                "compressed": _compressed(payload),
                 "recorded_mono_ns": int(recorded_mono_ns) if recorded_mono_ns is not None else 0,
             }
         )
     return metrics
+
+
+def load_gemini_run_summary(path: str | Path) -> dict[str, Any]:
+    target = Path(path)
+    if not target.exists():
+        return {}
+
+    summary: dict[str, Any] = {}
+    for line in target.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "result":
+            continue
+        stats = payload.get("stats")
+        if not isinstance(stats, dict):
+            continue
+        summary = {
+            "total_tokens": float(stats.get("total_tokens", 0.0) or 0.0),
+            "input_tokens": float(stats.get("input_tokens", 0.0) or 0.0),
+            "output_tokens": float(stats.get("output_tokens", 0.0) or 0.0),
+            "cached_tokens": float(stats.get("cached", 0.0) or 0.0),
+            "tool_calls": int(stats.get("tool_calls", 0) or 0),
+            "duration_ms": float(stats.get("duration_ms", 0.0) or 0.0),
+        }
+    return summary
 
 
 def merge_turn_metrics(
@@ -145,11 +136,6 @@ def merge_turn_metrics(
             float(turn_metric.get("prompt_tokens_per_turn", 0.0)),
             4,
         )
-        target["decision_latency_ms"] = round(
-            float(turn_metric.get("decision_latency_ms", 0.0)),
-            4,
-        )
-        target["compressed"] = bool(turn_metric.get("compressed"))
         family = turn_metric.get("family")
         if family and not target.get("family"):
             target["family"] = family

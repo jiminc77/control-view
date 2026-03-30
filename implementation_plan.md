@@ -411,7 +411,7 @@ multi-step mission은 full transcript replay가 아니라 successive `Control Vi
 
 1. `T1` mission을 chatter level `low`, `medium`, `high`로 구성
 2. 동일 mission script를 `B0`, `B1`, `B3`에 반복 실행하고, `B2`는 보조 subset에 대해 실행
-3. session logs, tool calls, token usage, compression count, latency를 수집
+3. official summary에서 tool calls, token usage, mission wall-clock을 수집
 4. raw tool outputs와 prompt context 크기를 비교
 5. mission completion, decision delay, operator intervention 횟수를 기록
 6. 결과를 fixed `token budget`과 fixed `wall-clock budget` 기준으로 다시 집계
@@ -422,9 +422,7 @@ multi-step mission은 full transcript replay가 아니라 successive `Control Vi
 * `mission_success_under_time_budget`
 * `cumulative_prompt_tokens`
 * `prompt_tokens_per_successful_control_decision`
-* `decision_latency_ms`
-* `compression_count`
-* `turns_until_first_compression`
+* `mission_duration_ms`
 
 ### E3. Memory Governance & Robustness
 
@@ -480,7 +478,6 @@ multi-step mission은 full transcript replay가 아니라 successive `Control Vi
 
 * `fault_recovery_success_rate`
 * `time_to_recovery_sec`
-* `extra_tool_calls_until_recovery`
 * `manual_override_needed`
 * `mission_completion_after_fault`
 * `post_fault_token_spend`
@@ -1740,10 +1737,9 @@ oracle:
 * `mission_success_rate`
 * `mission_success_under_token_budget`
 * `mission_success_under_time_budget`
+* `mission_duration_ms`
 * `cumulative_prompt_tokens`
 * `prompt_tokens_per_successful_control_decision`
-* `compression_count`
-* `decision_latency_ms`
 * `fault_recovery_success_rate`
 * `post_fault_token_spend`
 
@@ -1753,8 +1749,9 @@ oracle:
 
 ### Normal mode
 
-* Gemini CLI에는 sidecar MCP server만 연결
-* raw `ros-mcp-server` tools는 비노출 또는 read-only debug profile에만 연결
+* official `B0` live는 Gemini 전역 설정의 real `ros-mcp-server`만 허용
+* official `B1` live는 thin sidecar surface만 허용
+* official `B3` live는 model-only `family.step` surface만 허용
 
 ### Debug mode
 

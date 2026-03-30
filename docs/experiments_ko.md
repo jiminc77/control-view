@@ -39,13 +39,62 @@ artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/
 
 - `summary.json`
 - `metrics/summary.json`
-- `replay/gemini.jsonl`
 - `replay/observer.jsonl`
 - `fault_events.jsonl`
 - `effective_prompt.md`
 - `scenario.yaml`
 
-## 3. 실험 전 공통 준비
+공정 비교로 인정하는 live run 조건:
+
+- `B0`는 Gemini 전역 설정의 real `ros-mcp-server`만 사용해야 한다.
+- `B1`는 thin sidecar surface만 사용해야 한다.
+- `B3`는 model-only `family.step` surface만 사용해야 한다.
+- `family.execute/status/decide`가 섞인 구형 `B3` artifact와 raw-wrapper 기반 `B0` artifact는 공식 비교에서 제외한다.
+
+## 3.5. 3-Seed 실험 수와 자동화
+
+기본 seed는 `11,21,31`로 고정한다.
+
+- `core` bundle: 총 `78` runs
+- `core_plus_b2` bundle: 총 `84` runs
+
+구성은 아래와 같다.
+
+- `E1`: `9 x 3 = 27`
+- `E2` main: `3 scenarios x 3 baselines x 3 seeds = 27`
+- `E3` core: `6 x 3 = 18`
+- `E4`: `2 x 1 x 3 = 6`
+- `E2`의 `B2` 보조 replay 비교를 포함하면 `+6`, 총 `84`
+
+자동화 entrypoint:
+
+```bash
+uv run python scripts/run_experiment_matrix.py --bundle core --phase all
+uv run python scripts/run_experiment_matrix.py --bundle core_plus_b2 --phase all
+```
+
+지원 phase:
+
+- `clean`
+- `regen_traces`
+- `replay_core`
+- `live_e2`
+- `live_e4`
+- `aggregate`
+- `all`
+
+실행 후 `artifacts/aggregate/<stamp>/` 아래에 아래 파일이 생성된다.
+
+- `manifest.json`
+- `result.json`
+- `failed_jobs.json`
+- `retry_failed_jobs.sh`
+- `live_summary.json`
+- `live_summary.csv`
+- `replay_summary.json`
+- `replay_summary.csv`
+
+## 4. 실험 전 공통 준비
 
 1. `docs/runbook_ko.md`의 SITL + MAVROS + Python 환경 준비를 먼저 끝냅니다.
 2. nominal trace를 다시 생성합니다.
@@ -71,7 +120,7 @@ uv run python scripts/run_replay_experiments.py \
 - `legacy_trace_count`가 `0`
 - `official_trace_ready`가 `true`
 
-## 4. E1. Sufficiency / Relative Minimality
+## 5. E1. Sufficiency / Relative Minimality
 
 ### 목적
 
@@ -158,11 +207,11 @@ done
 - `canonical_arg_error_rate > 0`이면 slot이 단순 gating이 아니라 arg synthesis에도 필요합니다.
 - counterexample JSONL은 논문 본문이나 부록에 넣을 실제 예시로 씁니다.
 
-## 5. E2. Budgeted Context-Churn Efficiency
+## 6. E2. Budgeted Context-Churn Efficiency
 
 ### 목적
 
-`T1` chatter level이 올라갈 때 `B3`가 token/latency/mission success를 얼마나 안정적으로 유지하는지 본다.
+`T1` chatter level이 올라갈 때 `B3`가 token과 mission wall-clock, mission success를 얼마나 안정적으로 유지하는지 본다.
 
 ### 입력
 
@@ -214,7 +263,6 @@ uv run python scripts/run_live_experiments.py \
 - `summary.json`
 - `metrics/summary.json`
 - `replay/observer.jsonl`
-- `logs/gemini.jsonl`
 - `effective_prompt.md`
 
 ### 반드시 확인할 값
@@ -224,9 +272,7 @@ uv run python scripts/run_live_experiments.py \
 - `mission_success_under_time_budget`
 - `cumulative_prompt_tokens`
 - `prompt_tokens_per_successful_control_decision`
-- `decision_latency_ms`
-- `compression_count`
-- `turns_until_first_compression`
+- `mission_duration_ms`
 
 ### 결과 표 정리
 
@@ -240,18 +286,15 @@ uv run python scripts/run_live_experiments.py \
 - `mission_success_rate`
 - `cumulative_prompt_tokens`
 - `prompt_tokens_per_successful_control_decision`
-- `decision_latency_ms`
-- `compression_count`
-- `turns_until_first_compression`
+- `mission_duration_ms`
 - `manual_override_needed`
 
 ### 해석
 
-- chatter level이 올라갈수록 `B0/B1`의 token, latency 증가폭이 더 크면 계획과 일치합니다.
-- `B3`의 success가 비슷하거나 더 높으면서 token과 latency 증가폭이 작으면 효율 주장에 유리합니다.
-- 같은 success rate라도 `compression_count`와 `turns_until_first_compression`을 같이 봐야 합니다.
+- chatter level이 올라갈수록 `B0/B1`의 token, wall-clock 증가폭이 더 크면 계획과 일치합니다.
+- `B3`의 success가 비슷하거나 더 높으면서 token과 `mission_duration_ms`가 작으면 효율 주장에 유리합니다.
 
-## 6. E3. Memory Governance & Robustness
+## 7. E3. Memory Governance & Robustness
 
 ### 목적
 
@@ -371,7 +414,7 @@ uv run python scripts/run_replay_experiments.py \
 - revision drift fault는 `stale_action_rate`가 핵심 확인값입니다.
 - `unsafe_act_after_fault`가 0이 아니면 safety regression입니다.
 
-## 7. E4. Live System Validation
+## 8. E4. Live System Validation
 
 ### 목적
 
@@ -433,7 +476,6 @@ uv run python scripts/run_live_experiments.py \
 
 - `fault_recovery_success_rate`
 - `time_to_recovery_sec`
-- `extra_tool_calls_until_recovery`
 - `manual_override_needed`
 - `mission_completion_after_fault`
 - `post_fault_token_spend`
@@ -458,7 +500,6 @@ uv run python scripts/run_live_experiments.py \
 - `fault_event_count`
 - `fault_recovery_success_rate`
 - `time_to_recovery_sec`
-- `extra_tool_calls_until_recovery`
 - `manual_override_needed`
 - `mission_completion_after_fault`
 - `post_fault_token_spend`
@@ -469,7 +510,7 @@ uv run python scripts/run_live_experiments.py \
 - `manual_override_needed=true`라도 `unsafe act`가 없고 `SAFE_HOLD`로 끝났다면 degraded-but-safe로 분류합니다.
 - `post_fault_token_spend`가 과도하게 크면 recovery cost가 높은 것입니다.
 
-## 8. 결과 정리 형식
+## 9. 결과 정리 형식
 
 논문용 결과 정리는 아래 단위를 고정합니다.
 
@@ -479,17 +520,23 @@ uv run python scripts/run_live_experiments.py \
 - `seed`
 - `mission`
 
-실무적으로는 아래 두 장표가 가장 편합니다.
+실무적으로는 아래 두 장표로 나누는 편이 가장 안전합니다.
 
-### 표 1. 본표
+### 표 1. Causality / Governance
 
-한 줄 = `experiment × scenario × baseline × seed`
+- `E1/E3`를 넣습니다.
+- 한 줄 = `experiment × scenario × baseline × seed`
 
-### 표 2. Counterexample 표
+### 표 2. Full-System Live
+
+- `E2/E4`를 넣습니다.
+- 한 줄 = `experiment × scenario × baseline × seed`
+
+### 표 3. Counterexample 표
 
 한 줄 = `mission × fault_or_slot × counterexample_jsonl_path`
 
-## 9. 빠른 추출 예시
+## 10. 빠른 추출 예시
 
 ### Live summary 한 번에 보기
 
@@ -502,8 +549,7 @@ find /abs/path/to/control-view/artifacts/experiments -name summary.json -print0 
     .seed,
     .mission_completion_after_fault,
     .manual_override_needed,
-    .time_to_recovery_sec,
-    .extra_tool_calls_until_recovery
+    .time_to_recovery_sec
   ] | @tsv'
 ```
 
@@ -522,7 +568,7 @@ find /abs/path/to/control-view/artifacts/metrics -name 'e3_*.json' -print0 \
   ] | @tsv'
 ```
 
-## 10. 반드시 같이 기록할 메타데이터
+## 11. 반드시 같이 기록할 메타데이터
 
 - control-view git commit
 - PX4 git commit

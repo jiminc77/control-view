@@ -141,10 +141,10 @@ uv run control-view-observer \
 
 ### `B0`
 
-`B0`는 sidecar를 띄우지 않습니다. raw `ros-mcp-server` 실행 명령을 사용자가 준비해야 합니다.
+`B0`는 sidecar를 띄우지 않습니다. Gemini CLI 전역 설정에 등록된 real `ros-mcp-server`를 그대로 씁니다.
 
 ```bash
-export ROS_MCP_BASELINE_COMMAND='source /opt/ros/jazzy/setup.bash && ros-mcp-server ...'
+gemini mcp list
 ```
 
 ## 5. Nominal Trace 재생성
@@ -259,12 +259,6 @@ uv run python scripts/run_live_experiments.py \
 - `E4`: `t2_spec_drift`, `t3_recovery`
 - baseline: `B0`, `B1`, `B3`
 
-`B0`는 아래 env가 없으면 실행되지 않습니다.
-
-```bash
-export ROS_MCP_BASELINE_COMMAND='source /opt/ros/jazzy/setup.bash && ros-mcp-server ...'
-```
-
 ## 8. Output Layout
 
 live runner 기본 output root:
@@ -281,12 +275,12 @@ artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/
 - `fault_events.jsonl`
 - `control_artifacts/geofence.yaml`
 - `control_artifacts/mission_spec.yaml`
-- `replay/gemini.jsonl`
+- `replay/gemini.jsonl` (`B1/B3` only)
 - `replay/observer.jsonl`
-- `logs/gemini.jsonl`
 - `metrics/summary.json`
 
 이 경로가 공식 정리 단위입니다.
+Gemini raw conversation log는 metrics export 뒤 삭제되므로 공식 산출물에 포함하지 않습니다.
 
 ## 9. Baseline별 차이
 
@@ -295,6 +289,7 @@ artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/
 - full `Control View`
 - validity governor
 - obligation / lease / commit guard 포함
+- official live run은 model-only `family.step`만 허용
 
 ### `B1`
 
@@ -316,7 +311,7 @@ artifacts/experiments/<stamp>/<experiment>/<scenario>/<baseline>/
 - raw `ros-mcp-server`
 - transcript/session-summary memory
 - model은 raw ROS/MCP transcript를 따르며 sidecar semantic state는 없음
-- replay 비교 지표는 비어 있거나 0일 수 있음
+- 공식 live run은 Gemini 전역 설정의 `ros-mcp-server` 연결을 그대로 사용
 
 ## 10. 자주 막히는 지점
 

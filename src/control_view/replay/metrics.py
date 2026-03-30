@@ -54,7 +54,6 @@ def _turn_metric_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         record
         for record in _decision_records(records)
         if _value(record, "prompt_tokens_per_turn") is not None
-        or _value(record, "decision_latency_ms") is not None
     ]
     if decision_turns:
         return decision_turns
@@ -254,12 +253,9 @@ def compute_metrics(
             "unsafe_act_after_fault": 0.0,
             "mission_success_under_token_budget": 0.0,
             "mission_success_under_time_budget": 0.0,
+            "mission_duration_ms": 0.0,
             "cumulative_prompt_tokens": 0.0,
             "prompt_tokens_per_successful_control_decision": 0.0,
-            "compression_count": 0,
-            "turns_until_first_compression": 0,
-            "prompt_tokens_per_turn": 0.0,
-            "decision_latency_ms": 0.0,
             "fault_recovery_success_rate": 0.0,
             "post_fault_token_spend": 0.0,
         }
@@ -348,15 +344,6 @@ def compute_metrics(
     prompt_token_values = [
         float(_value(record, "prompt_tokens_per_turn") or 0.0)
         for record in turn_records
-    ]
-    latency_values = [
-        float(_value(record, "decision_latency_ms") or 0.0)
-        for record in turn_records
-    ]
-    compression_indexes = [
-        index + 1
-        for index, record in enumerate(turn_records)
-        if bool(_value(record, "compressed"))
     ]
     successful_control_decisions = sum(
         1 for action in action_summaries if action["latest_state"] == "CONFIRMED"
@@ -528,18 +515,15 @@ def compute_metrics(
             time_budget_successes / max(mission_total, 1),
             4,
         ),
+        "mission_duration_ms": round(
+            sum(mission_durations_ms.values()) / max(len(mission_durations_ms), 1),
+            4,
+        ),
         "cumulative_prompt_tokens": round(sum(prompt_token_values), 4),
         "prompt_tokens_per_successful_control_decision": round(
             sum(prompt_token_values) / max(successful_control_decisions, 1),
             4,
         ),
-        "compression_count": len(compression_indexes),
-        "turns_until_first_compression": compression_indexes[0] if compression_indexes else 0,
-        "prompt_tokens_per_turn": round(
-            sum(prompt_token_values) / max(len(turn_records), 1),
-            4,
-        ),
-        "decision_latency_ms": round(sum(latency_values) / max(len(turn_records), 1), 4),
         "fault_recovery_success_rate": round(
             observer_recovered_fault_count / max(observer_fault_count, 1),
             4,
