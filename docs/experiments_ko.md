@@ -83,12 +83,43 @@ uv run python scripts/run_experiment_matrix.py --bundle core_plus_b2 --phase all
 - `aggregate`
 - `all`
 
+중간에 automation이 멈추면 같은 stamp로 이어서 재시작합니다.
+
+```bash
+uv run python scripts/run_experiment_matrix.py \
+  --bundle core \
+  --phase all \
+  --resume-stamp <previous_stamp>
+```
+
+Gemini 내부 오류나 일시적 backend 오류에 대한 기본 보호:
+
+- `--max-attempts`: job당 최대 시도 횟수
+- `--retry-backoff-sec`: retryable failure에 대한 backoff 초 목록
+- `--job-timeout-sec`: job 하나가 너무 오래 걸릴 때 강제 timeout
+
+예시:
+
+```bash
+uv run python scripts/run_experiment_matrix.py \
+  --bundle core \
+  --phase live_e2 \
+  --seeds 11 \
+  --stamp 20260330_livecmp \
+  --max-attempts 2 \
+  --retry-backoff-sec 60,120 \
+  --job-timeout-sec 240
+```
+
 실행 후 `artifacts/aggregate/<stamp>/` 아래에 아래 파일이 생성된다.
 
 - `manifest.json`
 - `result.json`
 - `failed_jobs.json`
 - `retry_failed_jobs.sh`
+- `resume_matrix.sh`
+- `job_status.json`
+- `job_logs/*.log`
 - `live_summary.json`
 - `live_summary.csv`
 - `replay_summary.json`
