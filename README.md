@@ -54,7 +54,6 @@ bash -n scripts/*.sh
 
 - `docs/runbook_ko.md`: 로컬 개발, sidecar/observer 실행, SITL 절차
 - `docs/experiments_ko.md`: `E1~E4` 재현 절차, output layout, 결과 표 정리 방식
-- `docs/paper_experiment_plan_ko.md`: seed sweep, 전체 matrix, 논문용 집계 기준
 - `docs/gemini_demo_prompt_ko.md`: `B3` structured headless prompt
 - `docs/gemini_demo_prompt_b1_ko.md`: `B1` headless Gemini prompt
 - `docs/gemini_demo_prompt_b0_ko.md`: `B0` headless Gemini prompt
