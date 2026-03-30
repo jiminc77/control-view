@@ -56,10 +56,10 @@ bash -n scripts/*.sh
 
 - `docs/runbook_ko.md`: 로컬 개발, sidecar/observer 실행, SITL 절차
 - `docs/experiments_ko.md`: `E1~E4` 재현 절차, output layout, 결과 표 정리 방식
-- `docs/gemini_prompt_b3_semantic_step_ko.md`: `B3` semantic-step headless prompt
-- `docs/gemini_prompt_b1_thin_transcript_ko.md`: `B1` thin-transcript headless prompt
-- `docs/gemini_prompt_b0_raw_ros_ko.md`: `B0` raw-ROS headless prompt
-- `docs/gemini_prompt_common_rules_en.md`: shared Gemini headless prompt rules
+- `docs/gemini_prompt_b3.md`: `B3` semantic-step headless prompt
+- `docs/gemini_prompt_b1.md`: `B1` thin-transcript headless prompt
+- `docs/gemini_prompt_b0.md`: `B0` raw-ROS headless prompt
+- `docs/gemini_prompt_common.md`: shared Gemini headless prompt rules
 - `scripts/run_experiment_matrix.py`: clean, trace regeneration, replay/live bundle 실행, aggregate export
 
 ## 자동화 스크립트

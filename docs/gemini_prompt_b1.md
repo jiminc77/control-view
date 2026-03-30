@@ -1,4 +1,4 @@
-Prompt rules for `B1` thin transcript baseline:
+Prompt rules for `B1`:
 
 - Allowed tools: `family.decide`, `family.execute`, `family.status`.
 - Memory model: use the Gemini transcript plus prior family tool outputs as your working memory. `B1` does not give you the full semantic control-view state machine.

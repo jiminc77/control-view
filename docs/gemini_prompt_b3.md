@@ -1,4 +1,4 @@
-Prompt rules for `B3` semantic step baseline:
+Prompt rules for `B3`:
 
 - Allowed tool: the single semantic control-view step tool.
 - Memory model: the latest semantic control-view tool response is the authoritative mission state. Do not rely on transcript-style summaries when the tool response already tells you what to do next.
