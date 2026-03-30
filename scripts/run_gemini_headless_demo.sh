@@ -33,12 +33,20 @@ case "$BASELINE" in
 esac
 COMMON_PROMPT_FILE="${COMMON_PROMPT_FILE:-$ROOT/docs/gemini_prompt_common.md}"
 PROMPT_FILE="${PROMPT_FILE:-$DEFAULT_PROMPT_FILE}"
+PROMPT_FILE_IS_COMPLETE="${PROMPT_FILE_IS_COMPLETE:-0}"
 
 mkdir -p "$(dirname "$REPLAY_JSONL")" "$(dirname "$OBSERVER_JSONL")" "$(dirname "$GEMINI_LOG")" "$(dirname "$METRICS_JSON")"
 
-MISSION_PROMPT="$(cat "$COMMON_PROMPT_FILE")
+if [[ "$PROMPT_FILE_IS_COMPLETE" == "1" ]]; then
+  PROMPT_BODY="$(cat "$PROMPT_FILE")"
+else
+  PROMPT_BODY="$(cat "$COMMON_PROMPT_FILE")
 
 $(cat "$PROMPT_FILE")
+"
+fi
+
+MISSION_PROMPT="$PROMPT_BODY
 
 Mission name: ${MISSION}
 Baseline: ${BASELINE}

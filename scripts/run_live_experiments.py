@@ -197,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             "STAMP": stamp,
             "SEED": str(args.seed),
             "PROMPT_FILE": str(paths["prompt_file"]),
+            "PROMPT_FILE_IS_COMPLETE": "1",
             "REPLAY_JSONL": str(paths["replay_jsonl"]),
             "OBSERVER_JSONL": str(paths["observer_jsonl"]),
             "FAULT_EVENTS_JSONL": str(paths["fault_events_jsonl"]),
