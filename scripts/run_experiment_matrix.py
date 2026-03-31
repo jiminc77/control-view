@@ -9,6 +9,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -60,6 +61,15 @@ def _parse_backoff(raw: str | None) -> list[int]:
     if not raw:
         return list(DEFAULT_BACKOFF_SEC)
     return [int(item.strip()) for item in raw.split(",") if item.strip()]
+
+
+def _status(message: str) -> None:
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
+
+
+def _job_label(*, job: Job, job_index: int, job_total: int) -> str:
+    return f"[{job_index}/{job_total}] {job.phase} {job.name}"
 
 
 def _replay_job(
@@ -504,6 +514,8 @@ def _run_job_with_retries(
     metadata_root: Path,
     job_status: dict[str, dict[str, Any]],
     job: Job,
+    job_index: int,
+    job_total: int,
     max_attempts: int,
     backoff_sec: list[int],
     job_timeout_sec: int,
@@ -512,6 +524,8 @@ def _run_job_with_retries(
 ) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     for attempt in range(1, max_attempts + 1):
+        label = _job_label(job=job, job_index=job_index, job_total=job_total)
+        _status(f"{label} attempt {attempt}/{max_attempts} started")
         job_status[job.name] = {
             "phase": job.phase,
             "name": job.name,
@@ -525,6 +539,7 @@ def _run_job_with_retries(
 
         log_path = _job_log_path(metadata_root, job_name=job.name, attempt=attempt)
         if live_reset_hook is not None and _needs_live_reset(job):
+            _status(f"{label} resetting live stack")
             reset_cmd = _live_reset_cmd(
                 root=root,
                 hook=live_reset_hook,
@@ -543,6 +558,7 @@ def _run_job_with_retries(
             if reset_output:
                 log_path.write_text(reset_output, encoding="utf-8")
             if reset_completed.returncode != 0:
+                _status(f"{label} reset failed with exit {reset_completed.returncode}")
                 retryable = attempt < max_attempts
                 attempt_payload = {
                     "attempt": attempt,
@@ -573,6 +589,7 @@ def _run_job_with_retries(
                     }
                     _save_job_status(metadata_root, job_status)
                     if sleep_sec > 0:
+                        _status(f"{label} retry scheduled after reset failure in {sleep_sec}s")
                         time.sleep(sleep_sec)
                     continue
                 attempts.append(attempt_payload)
@@ -586,6 +603,8 @@ def _run_job_with_retries(
                     "attempts": attempts,
                     "last_log_path": str(log_path),
                 }
+            _status(f"{label} live stack ready")
+        started_at = time.monotonic()
         process = subprocess.Popen(
             job.cmd,
             cwd=root,
@@ -608,6 +627,7 @@ def _run_job_with_retries(
             }
             if returncode == 0:
                 attempts.append(attempt_payload)
+                _status(f"{label} completed in {time.monotonic() - started_at:.1f}s")
                 return {
                     "phase": job.phase,
                     "name": job.name,
@@ -617,7 +637,7 @@ def _run_job_with_retries(
                     "attempt_count": attempt,
                     "attempts": attempts,
                     "last_log_path": str(log_path),
-            }
+                }
             if retryable and attempt < max_attempts:
                 sleep_sec = (
                     backoff_sec[min(attempt - 1, len(backoff_sec) - 1)]
@@ -639,9 +659,13 @@ def _run_job_with_retries(
                 }
                 _save_job_status(metadata_root, job_status)
                 if sleep_sec > 0:
+                    _status(
+                        f"{label} retryable failure exit {returncode}; retrying in {sleep_sec}s"
+                    )
                     time.sleep(sleep_sec)
                 continue
             attempts.append(attempt_payload)
+            _status(f"{label} failed with exit {returncode}")
             return {
                 "phase": job.phase,
                 "name": job.name,
@@ -669,6 +693,7 @@ def _run_job_with_retries(
                 "log_path": str(log_path),
             }
             attempts.append(attempt_payload)
+            _status(f"{label} timed out after {job_timeout_sec}s")
             return {
                 "phase": job.phase,
                 "name": job.name,
@@ -847,6 +872,9 @@ def main(argv: list[str] | None = None) -> int:
         "aggregate_outputs": {},
     }
     _write_json(metadata_root / "manifest.json", manifest)
+    _status(
+        f"matrix start bundle={args.bundle} phase={args.phase} jobs={len(jobs)} stamp={stamp}"
+    )
     _write_resume_script(
         metadata_root / "resume_matrix.sh",
         root=root,
@@ -858,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.phase in {"clean", "all"} and (not args.resume_stamp or args.force_clean):
+        _status("phase clean started")
         result_payload["removed_targets"] = _clean_generated_artifacts(root)
         metadata_root = _metadata_root(root, stamp)
         _write_json(metadata_root / "manifest.json", manifest)
@@ -868,10 +897,12 @@ def main(argv: list[str] | None = None) -> int:
             phase="clean",
             status="completed",
         )
+        _status(f"phase clean completed removed={len(result_payload['removed_targets'])}")
     if (
         args.phase in {"regen_traces", "all"}
         and not (args.resume_stamp and _completed(job_status, STATE_REGEN))
     ):
+        _status("phase regen_traces started")
         regen_cmd = [
             "bash",
             str(root / "scripts" / "run_sitl_smoke.sh"),
@@ -915,15 +946,21 @@ def main(argv: list[str] | None = None) -> int:
             status="completed",
             cmd=regen_cmd,
         )
+        _status("phase regen_traces completed")
 
-    for job in jobs:
+    for job_index, job in enumerate(jobs, start=1):
         if _completed(job_status, job.name):
+            _status(
+                f"{_job_label(job=job, job_index=job_index, job_total=len(jobs))} skipped"
+            )
             continue
         outcome = _run_job_with_retries(
             root=root,
             metadata_root=metadata_root,
             job_status=job_status,
             job=job,
+            job_index=job_index,
+            job_total=len(jobs),
             max_attempts=max(args.max_attempts, 1),
             backoff_sec=backoff_sec,
             job_timeout_sec=max(args.job_timeout_sec, 1),
@@ -949,6 +986,7 @@ def main(argv: list[str] | None = None) -> int:
         args.phase in {"aggregate", "all"}
         and not (args.resume_stamp and _completed(job_status, STATE_AGGREGATE))
     ):
+        _status("phase aggregate started")
         result_payload["aggregate_outputs"] = _aggregate_outputs(root, stamp)
         _record_builtin_status(
             job_status=job_status,
@@ -957,6 +995,7 @@ def main(argv: list[str] | None = None) -> int:
             phase="aggregate",
             status="completed",
         )
+        _status("phase aggregate completed")
 
     _write_json(metadata_root / "result.json", result_payload)
     _write_json(metadata_root / "failed_jobs.json", result_payload["failed_jobs"])
@@ -966,6 +1005,11 @@ def main(argv: list[str] | None = None) -> int:
         failed_jobs=result_payload["failed_jobs"],
     )
 
+    _status(
+        "matrix completed with failures"
+        if result_payload["failed_jobs"]
+        else "matrix completed successfully"
+    )
     print(json.dumps(result_payload, indent=2, sort_keys=True))
     return 1 if result_payload["failed_jobs"] else 0
 

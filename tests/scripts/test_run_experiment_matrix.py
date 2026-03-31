@@ -115,3 +115,20 @@ def test_dry_run_reports_default_live_reset_hook() -> None:
     assert completed.returncode == 0
     payload = json.loads(completed.stdout)
     assert payload["live_reset_hook"] == str(ROOT / "scripts" / "reset_live_stack.sh")
+
+
+def test_job_label_includes_progress_and_phase() -> None:
+    job = MODULE.Job(phase="live_e2", name="E2_t1_high_B0_seed11", cmd=["echo", "ok"])
+
+    label = MODULE._job_label(job=job, job_index=3, job_total=78)
+
+    assert label == "[3/78] live_e2 E2_t1_high_B0_seed11"
+
+
+def test_status_writes_brief_progress_to_stderr(capsys) -> None:
+    MODULE._status("phase aggregate started")
+
+    captured = capsys.readouterr()
+
+    assert "phase aggregate started" in captured.err
+    assert captured.out == ""
